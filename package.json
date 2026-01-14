@@ -1,18 +1,19 @@
 {
-    "name": "mcp-backend",
-    "private": true,
-    "type": "module",
-    "scripts": {
-        "dev": "wrangler dev",
-        "deploy": "npx wrangler deploy",
-        "type-check": "tsc --noEmit"
-    },
-    "dependencies": {
-        "agents": "^0.3.1"
-    },
-    "devDependencies": {
-        "@cloudflare/workers-types": "^4.20251229.0",
-        "typescript": "^5.0.0",
-        "wrangler": "^3.101.0"
-    }
+  "name": "mcp-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "tsc && wrangler deploy --dry-run",
+    "deploy": "tsc && wrangler deploy",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "agents": "^0.3.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251229.0",
+    "typescript": "^5.0.0",
+    "wrangler": "^3.101.0"
+  }
 }
