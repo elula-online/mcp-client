@@ -30,34 +30,41 @@ type Message =
     };
 
 export class MyAgent extends Agent<Env, never> {
-  async onStart() {
-    const portalUrl = this.env.MCP_PORTAL_URL;
-    try {
-      const { id, authUrl } = await this.addMcpServer(
-        "SystemPortal",
-        portalUrl,
-        this.env.HOST
-      );
-
-      if (authUrl) {
-        console.log(
-          "---------------------------------------------------------"
-        );
-        console.log("ACTION REQUIRED: You need to authorize this connection.");
-        console.log("Open this URL in your browser to log in:");
-        console.log(authUrl);
-        console.log(
-          "---------------------------------------------------------"
-        );
-        return;
+ async onStart() {
+  const portalUrl = this.env.MCP_PORTAL_URL;
+  
+  try {
+    const result = await this.addMcpServer(
+      "SystemPortal",
+      portalUrl,
+      this.env.HOST,
+      undefined, 
+      {
+        transport: {
+          type: "sse",
+          headers: {
+            "Authorization": `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
+            "X-Account-ID": this.env.ACCOUNT_ID,
+            "X-Gateway-ID": this.env.GATEWAY_ID,
+          },
+        },
       }
+    );
 
-      const tools: any = await this.mcp.getAITools();
-      console.log(`[Agent] Success! Found tools: ${JSON.stringify(tools)}`);
-    } catch (err) {
-      console.error("[Agent] Portal Connection Error:", err);
+    if (result.state === "authenticating") {
+      console.warn("[Agent] Automatic auth failed. Manual action still required:", result.authUrl);
+      return;
     }
+
+    // result.state is now "ready"
+    console.log(`[Agent] Connected! ID: ${result.id}`);
+    
+    const tools = await this.mcp.getAITools();
+    console.log(`[Agent] Success! Found tools: ${Object.keys(tools).length}`);
+  } catch (err) {
+    console.error("[Agent] Portal Connection Error:", err);
   }
+}
 
   async onRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -78,10 +85,10 @@ export class MyAgent extends Agent<Env, never> {
 
       const tools = Object.entries(mcpToolsResult).map(
         ([toolKey, tool]: [string, any]) => {
-          // Clean name for the LLM
+   
           const realName = tool.name || toolKey.split("_").slice(2).join("_");
 
-          // Store the whole tool object (which has the .execute function)
+          // store the whole tool object (which has the .execute function)
           toolExecutorMap[realName] = tool;
 
           return {
@@ -136,15 +143,14 @@ export class MyAgent extends Agent<Env, never> {
             content: result.result.response,
           };
         } else if (result.messages && result.messages.length > 0) {
-          // If the gateway returned a message history, take the last one
+          // if the gateway returned a message history, take the last one
           assistantMessage = { ...result.messages[result.messages.length - 1] };
         } else {
-          // FALLBACK: Create a clean assistant message object
-          // This prevents "Cannot set properties of undefined"
+          // create a clean assistant message object
           assistantMessage = { role: "assistant", content: "" };
         }
 
-        // Now safely attach tool_calls if they exist
+        // attach tool_calls if they exist
         if (result.result.tool_calls) {
           assistantMessage.tool_calls = result.result.tool_calls;
         }
@@ -153,13 +159,12 @@ export class MyAgent extends Agent<Env, never> {
 
         console.log("assistantMessage: ", assistantMessage);
 
-        // 2. CHECK FOR TOOL CALLS
+       
         if (result.result.tool_calls && result.result.tool_calls.length > 0) {
           for (const toolCall of result.result.tool_calls) {
             const { name, arguments: args } = toolCall;
             let parsedArgs = typeof args === "string" ? JSON.parse(args) : args;
 
-            // Data Type Sanitization
             for (const key in parsedArgs) {
               const val = parsedArgs[key];
               if (
@@ -182,8 +187,7 @@ export class MyAgent extends Agent<Env, never> {
                   content: JSON.stringify(toolOutput),
                 });
               } catch (e: any) {
-                // By pushing this error as a "tool" result, the LLM will see it
-                // and in the NEXT loop iteration, it will explain the 403 to you.
+                
                 messages.push({
                   role: "tool",
                   tool_call_id: toolCall.id,
@@ -197,9 +201,9 @@ export class MyAgent extends Agent<Env, never> {
               }
             }
           }
-          // The loop continues, and the LLM will now "see" the 403 error in the history
+          
         } else {
-          // No tool calls means the LLM has given its final reasoned answer
+          
           isRunning = false;
         }
       }
