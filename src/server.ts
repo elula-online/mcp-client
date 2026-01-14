@@ -21,7 +21,13 @@ type Message =
       content: string;
       tool_calls?: any[];
     }
-  | { role: "tool"; content: string; tool_call_id: string; name: string };
+  | {
+      role: "tool";
+      content: string;
+      tool_call_id: string;
+      name: string;
+      tool_calls?: never;
+    };
 
 export class MyAgent extends Agent<Env, never> {
   async onStart() {
@@ -67,15 +73,26 @@ export class MyAgent extends Agent<Env, never> {
 
       // fetch and format MCP tools for Cloudflare Workers AI
       const mcpToolsResult = await this.mcp.getAITools();
+
+      const toolExecutorMap: Record<string, any> = {};
+
       const tools = Object.entries(mcpToolsResult).map(
-        ([_, tool]: [any, any]) => ({
-          type: "function",
-          function: {
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.inputSchema,
-          },
-        })
+        ([toolKey, tool]: [string, any]) => {
+          // Clean name for the LLM
+          const realName = tool.name || toolKey.split("_").slice(2).join("_");
+
+          // Store the whole tool object (which has the .execute function)
+          toolExecutorMap[realName] = tool;
+
+          return {
+            type: "function",
+            function: {
+              name: realName,
+              description: tool.description,
+              parameters: tool.inputSchema.jsonSchema,
+            },
+          };
+        }
       );
 
       // initialize message history
@@ -84,15 +101,12 @@ export class MyAgent extends Agent<Env, never> {
       let loopCount = 0;
       const MAX_LOOPS = 5;
 
-      console.log("Token: ", this.env.CLOUDFLARE_API_TOKEN);
-
       while (isRunning && loopCount < MAX_LOOPS) {
         loopCount++;
 
-        // run inference via AI Gateway Universal Endpoint (Workers AI provider)
         const response = await gateway.run({
           provider: "workers-ai",
-          endpoint: "@cf/meta/llama-3.1-70b-instruct", // using a strong CF model
+          endpoint: "@cf/meta/llama-3.1-70b-instruct",
           headers: {
             "Content-Type": "application/json",
             authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN || "LOCAL_AUTH_FALLBACK"}`,
@@ -105,46 +119,87 @@ export class MyAgent extends Agent<Env, never> {
         });
 
         const result = await response.json();
-
-        // handle potential gateway/model errors
-        if (!result.choices || result.choices.length === 0) {
-          console.error(
-            "[Agent Error] Unexpected Gateway Response:",
-            JSON.stringify(result, null, 2)
-          );
-          // return the error to the client instead of throwing generic error
+        if (!result.success)
           return Response.json(
-            {
-              error: "Invalid response from AI Gateway",
-              details: result,
-            },
+            { error: "Gateway Error", details: result },
             { status: 500 }
           );
+
+        console.log("result: ", result);
+
+        let assistantMessage: Message;
+
+        if (result.result.response) {
+          // If there's a text response, use it
+          assistantMessage = {
+            role: "assistant",
+            content: result.result.response,
+          };
+        } else if (result.messages && result.messages.length > 0) {
+          // If the gateway returned a message history, take the last one
+          assistantMessage = { ...result.messages[result.messages.length - 1] };
+        } else {
+          // FALLBACK: Create a clean assistant message object
+          // This prevents "Cannot set properties of undefined"
+          assistantMessage = { role: "assistant", content: "" };
         }
 
-        const message = result.choices[0].message;
-        messages.push(message);
+        // Now safely attach tool_calls if they exist
+        if (result.result.tool_calls) {
+          assistantMessage.tool_calls = result.result.tool_calls;
+        }
 
-        // check if the model wants to use a tool
-        if (message.tool_calls && message.tool_calls.length > 0) {
-          for (const toolCall of message.tool_calls) {
-            const { name, arguments: args } = toolCall.function;
-            const parsedArgs =
-              typeof args === "string" ? JSON.parse(args) : args;
+        messages.push(assistantMessage);
 
-            // execute the tool call via MCP
-            const toolOutput = await this.mcp.callTool(name, parsedArgs);
+        console.log("assistantMessage: ", assistantMessage);
 
-            // add the tool result to history so the LLM can see it in the next turn
-            messages.push({
-              role: "tool",
-              tool_call_id: toolCall.id,
-              name: name,
-              content: JSON.stringify(toolOutput),
-            });
+        // 2. CHECK FOR TOOL CALLS
+        if (result.result.tool_calls && result.result.tool_calls.length > 0) {
+          for (const toolCall of result.result.tool_calls) {
+            const { name, arguments: args } = toolCall;
+            let parsedArgs = typeof args === "string" ? JSON.parse(args) : args;
+
+            // Data Type Sanitization
+            for (const key in parsedArgs) {
+              const val = parsedArgs[key];
+              if (
+                typeof val === "string" &&
+                !isNaN(Number(val)) &&
+                val.trim() !== ""
+              ) {
+                parsedArgs[key] = Number(val);
+              }
+            }
+
+            const tool = toolExecutorMap[name];
+            if (tool) {
+              try {
+                const toolOutput = await tool.execute(parsedArgs);
+                messages.push({
+                  role: "tool",
+                  tool_call_id: toolCall.id,
+                  name: name,
+                  content: JSON.stringify(toolOutput),
+                });
+              } catch (e: any) {
+                // By pushing this error as a "tool" result, the LLM will see it
+                // and in the NEXT loop iteration, it will explain the 403 to you.
+                messages.push({
+                  role: "tool",
+                  tool_call_id: toolCall.id,
+                  name: name,
+                  content: JSON.stringify({
+                    error:
+                      "Access Denied (403). The Mattermost server is blocking this request via Cloudflare WAF.",
+                    raw_detail: e.message,
+                  }),
+                });
+              }
+            }
           }
+          // The loop continues, and the LLM will now "see" the 403 error in the history
         } else {
-          // no more tool calls, we have our final answer
+          // No tool calls means the LLM has given its final reasoned answer
           isRunning = false;
         }
       }
