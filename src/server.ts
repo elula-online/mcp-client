@@ -43,7 +43,7 @@ export class MyAgent extends Agent<Env, never> {
         undefined,
         {
           transport: {
-            type: "sse",
+            type: "streamable-http",
             headers: {
               "CF-Access-Client-Id": this.env.CFAccessClientId,
               "CF-Access-Client-Secret": this.env.CFAccessClientSecret,
