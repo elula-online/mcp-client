@@ -32,7 +32,7 @@ type Message =
     };
 
 export class MyAgent extends Agent<Env, never> {
-async onStart() {
+  async onStart() {
     const portalUrl = this.env.MCP_PORTAL_URL;
 
     try {
@@ -55,10 +55,10 @@ async onStart() {
       // If we get tools, the session is valid and we can ignore the auth warning.
       let toolCount = 0;
       try {
-          const tools = await this.mcp.getAITools();
-          toolCount = Object.keys(tools).length;
+        const tools = await this.mcp.getAITools();
+        toolCount = Object.keys(tools).length;
       } catch (e) {
-          // Ignore tool fetch errors during check
+        // Ignore tool fetch errors during check
       }
 
       if (result.state === "authenticating" && toolCount === 0) {
@@ -71,7 +71,6 @@ async onStart() {
 
       console.log(`[Agent] Connected! ID: ${result.id}`);
       console.log(`[Agent] Success! Found tools: ${toolCount}`);
-
     } catch (err) {
       console.error("[Agent] Portal Connection Error:", err);
     }
@@ -113,7 +112,25 @@ async onStart() {
       );
 
       // initialize message history
-      let messages: Message[] = [{ role: "user", content: prompt }];
+      const systemPrompt = `You are a professional production assistant. 
+
+### CORE GUIDELINES:
+1. **Tool Usage:** Use tools ONLY when necessary. If general knowledge suffices, use that.
+2. **Capability Boundaries:** If a request requires data/tools you don't have, state that you don't have access to that specific functionality.
+3. **Formatting:** ALWAYS respond with well-formatted, clean, and readable Markdown. Use lists, bold text, and headers where appropriate.
+
+### TOOL DATA PROCESSING:
+- NEVER output raw JSON or technical strings (like "{\\"success\\": true...}") to the user.
+- Your job is to extract the relevant information from tool results and present it in a helpful, conversational summary.
+- Example: If a tool returns a 'post_id' and a 'message', don't show the IDs; just say: "I've successfully sent your message: 'Good day' to the channel."
+
+### ERROR HANDLING:
+- If a tool fails (e.g., 403 error), explain clearly that a firewall or permission restriction blocked the action.`;
+
+      let messages: Message[] = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt },
+      ];
       let isRunning = true;
       let loopCount = 0;
       const MAX_LOOPS = 5;
