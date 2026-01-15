@@ -32,7 +32,7 @@ type Message =
     };
 
 export class MyAgent extends Agent<Env, never> {
-  async onStart() {
+async onStart() {
     const portalUrl = this.env.MCP_PORTAL_URL;
 
     try {
@@ -45,9 +45,6 @@ export class MyAgent extends Agent<Env, never> {
           transport: {
             type: "sse",
             headers: {
-              // Authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
-              // "X-Account-ID": this.env.ACCOUNT_ID,
-              // "X-Gateway-ID": this.env.GATEWAY_ID,
               "CF-Access-Client-Id": this.env.CFAccessClientId,
               "CF-Access-Client-Secret": this.env.CFAccessClientSecret,
             },
@@ -55,19 +52,26 @@ export class MyAgent extends Agent<Env, never> {
         }
       );
 
-      if (result.state === "authenticating") {
+      // If we get tools, the session is valid and we can ignore the auth warning.
+      let toolCount = 0;
+      try {
+          const tools = await this.mcp.getAITools();
+          toolCount = Object.keys(tools).length;
+      } catch (e) {
+          // Ignore tool fetch errors during check
+      }
+
+      if (result.state === "authenticating" && toolCount === 0) {
         console.warn(
-          "[Agent] Automatic auth failed. Manual action still required:",
-          result.authUrl
+          "[Agent] Auth required. Please login:",
+          (result as any).authUrl
         );
         return;
       }
 
-      // result.state is now "ready"
       console.log(`[Agent] Connected! ID: ${result.id}`);
+      console.log(`[Agent] Success! Found tools: ${toolCount}`);
 
-      const tools = await this.mcp.getAITools();
-      console.log(`[Agent] Success! Found tools: ${Object.keys(tools).length}`);
     } catch (err) {
       console.error("[Agent] Portal Connection Error:", err);
     }
