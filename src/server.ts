@@ -13,6 +13,8 @@ type Env = {
   GATEWAY_ID: string;
   AI: any;
   CLOUDFLARE_API_TOKEN: string;
+  CFAccessClientId: string;
+  CFAccessClientSecret: string;
 };
 
 type Message =
@@ -30,41 +32,46 @@ type Message =
     };
 
 export class MyAgent extends Agent<Env, never> {
- async onStart() {
-  const portalUrl = this.env.MCP_PORTAL_URL;
-  
-  try {
-    const result = await this.addMcpServer(
-      "SystemPortal",
-      portalUrl,
-      this.env.HOST,
-      undefined, 
-      {
-        transport: {
-          type: "sse",
-          headers: {
-            "Authorization": `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
-            "X-Account-ID": this.env.ACCOUNT_ID,
-            "X-Gateway-ID": this.env.GATEWAY_ID,
+  async onStart() {
+    const portalUrl = this.env.MCP_PORTAL_URL;
+
+    try {
+      const result = await this.addMcpServer(
+        "SystemPortal",
+        portalUrl,
+        this.env.HOST,
+        undefined,
+        {
+          transport: {
+            type: "sse",
+            headers: {
+              // Authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
+              // "X-Account-ID": this.env.ACCOUNT_ID,
+              // "X-Gateway-ID": this.env.GATEWAY_ID,
+              "CF-Access-Client-Id": this.env.CFAccessClientId,
+              "CF-Access-Client-Secret": this.env.CFAccessClientSecret,
+            },
           },
-        },
+        }
+      );
+
+      if (result.state === "authenticating") {
+        console.warn(
+          "[Agent] Automatic auth failed. Manual action still required:",
+          result.authUrl
+        );
+        return;
       }
-    );
 
-    if (result.state === "authenticating") {
-      console.warn("[Agent] Automatic auth failed. Manual action still required:", result.authUrl);
-      return;
+      // result.state is now "ready"
+      console.log(`[Agent] Connected! ID: ${result.id}`);
+
+      const tools = await this.mcp.getAITools();
+      console.log(`[Agent] Success! Found tools: ${Object.keys(tools).length}`);
+    } catch (err) {
+      console.error("[Agent] Portal Connection Error:", err);
     }
-
-    // result.state is now "ready"
-    console.log(`[Agent] Connected! ID: ${result.id}`);
-    
-    const tools = await this.mcp.getAITools();
-    console.log(`[Agent] Success! Found tools: ${Object.keys(tools).length}`);
-  } catch (err) {
-    console.error("[Agent] Portal Connection Error:", err);
   }
-}
 
   async onRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -85,7 +92,6 @@ export class MyAgent extends Agent<Env, never> {
 
       const tools = Object.entries(mcpToolsResult).map(
         ([toolKey, tool]: [string, any]) => {
-   
           const realName = tool.name || toolKey.split("_").slice(2).join("_");
 
           // store the whole tool object (which has the .execute function)
@@ -159,7 +165,6 @@ export class MyAgent extends Agent<Env, never> {
 
         console.log("assistantMessage: ", assistantMessage);
 
-       
         if (result.result.tool_calls && result.result.tool_calls.length > 0) {
           for (const toolCall of result.result.tool_calls) {
             const { name, arguments: args } = toolCall;
@@ -187,7 +192,6 @@ export class MyAgent extends Agent<Env, never> {
                   content: JSON.stringify(toolOutput),
                 });
               } catch (e: any) {
-                
                 messages.push({
                   role: "tool",
                   tool_call_id: toolCall.id,
@@ -201,9 +205,7 @@ export class MyAgent extends Agent<Env, never> {
               }
             }
           }
-          
         } else {
-          
           isRunning = false;
         }
       }
