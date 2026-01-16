@@ -7,8 +7,8 @@
     "binding": "AI"
   },
   "vars": {
-    "HOST": "https://mcp-client.elula.workers.dev",
-    "MCP_PORTAL_URL": "https://mcp.elulaonline.co.za/mcp",
+    "HOST": "https://mcp.elula.cloud",
+    "MCP_PORTAL_URL": "https://mcp.elula.cloud/mcp",
     "GATEWAY_ID":"paraat-001",
     "ACCOUNT_ID":"2f3a54283c593ca9fb546474ca1e5c68",
     "CLOUDFLARE_API_TOKEN": "ZI3vyH40d-TjQooJ-jPbDzsJwjndhQWayaXU6xbe",
