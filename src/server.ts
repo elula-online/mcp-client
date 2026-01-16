@@ -79,6 +79,26 @@ export class MyAgent extends Agent<Env, never> {
   async onRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
+    // health check point
+    if (url.pathname.endsWith("/health")) {
+      const servers = await this.mcp.listServers();
+      const mcpTools = await this.mcp.getAITools();
+      const toolCount = Object.keys(mcpTools).length;
+
+      const status = {
+        status: toolCount > 0 ? "healthy" : "initializing",
+        agent_instance: this.name,
+        tools_discovered: toolCount,
+        servers: servers.map((s: any) => ({
+          name: s.name,
+          state: s.state || "unknown",
+        })),
+        timestamp: new Date().toISOString(),
+      };
+
+      return Response.json(status, { status: toolCount > 0 ? 200 : 503 });
+    }
+
     if (url.pathname.endsWith("/tools")) {
       const tools = await this.mcp.getAITools();
       return Response.json({ status: "success", tools });
@@ -86,10 +106,23 @@ export class MyAgent extends Agent<Env, never> {
 
     if (request.method === "POST" && url.pathname.endsWith("/chat")) {
       const { prompt } = (await request.json()) as { prompt: string };
+
+      let attempts = 0;
+      let mcpToolsResult = await this.mcp.getAITools();
+
+      while (Object.keys(mcpToolsResult).length === 0 && attempts < 5) {
+        console.log(
+          `[Agent] Waiting for MCP discovery... attempt ${attempts + 1}`
+        );
+        await new Promise((resolve) => setTimeout(resolve, 1000)); // wait 1s
+        mcpToolsResult = await this.mcp.getAITools();
+        attempts++;
+      }
+
       const gateway = this.env.AI.gateway(this.env.GATEWAY_ID);
 
       // fetch and format MCP tools for Cloudflare Workers AI
-      const mcpToolsResult = await this.mcp.getAITools();
+      // const mcpToolsResult = await this.mcp.getAITools();
 
       const toolExecutorMap: Record<string, any> = {};
 
@@ -164,7 +197,7 @@ export class MyAgent extends Agent<Env, never> {
         let assistantMessage: Message;
 
         if (result.result.response) {
-          // If there's a text response, use it
+          // if there is a text response, use it
           assistantMessage = {
             role: "assistant",
             content: result.result.response,
