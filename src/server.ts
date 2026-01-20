@@ -7,6 +7,7 @@ import {
 
 type Env = {
   MyAgent: AgentNamespace<MyAgent>;
+
   HOST: string;
   MCP_PORTAL_URL: string;
   ACCOUNT_ID: string;
@@ -36,17 +37,8 @@ export class MyAgent extends Agent<Env, never> {
     const portalUrl = this.env.MCP_PORTAL_URL;
 
     try {
-
-      const existingServers = await this.mcp.listServers();
-      if (existingServers.length > 0) {
-         for (const server of existingServers) {
-             // Optional: only remove if it matches "SystemPortal" to be safe
-             if (server.name === "SystemPortal") await this.mcp.removeServer(server.name);
-         }
-      }
-
       const result = await this.addMcpServer(
-        "SystemPortal",
+        "SystemMCPportal",
         portalUrl,
         this.env.HOST,
         undefined,
@@ -58,13 +50,16 @@ export class MyAgent extends Agent<Env, never> {
               "CF-Access-Client-Secret": this.env.CFAccessClientSecret,
             },
           },
-        }
+        },
       );
 
       // If we get tools, the session is valid and we can ignore the auth warning.
+
       let toolCount = 0;
+
       try {
         const tools = await this.mcp.getAITools();
+
         toolCount = Object.keys(tools).length;
       } catch (e) {
         // Ignore tool fetch errors during check
@@ -73,12 +68,15 @@ export class MyAgent extends Agent<Env, never> {
       if (result.state === "authenticating" && toolCount === 0) {
         console.warn(
           "[Agent] Auth required. Please login:",
-          (result as any).authUrl
+
+          (result as any).authUrl,
         );
+
         return;
       }
 
       console.log(`[Agent] Connected! ID: ${result.id}`);
+
       console.log(`[Agent] Success! Found tools: ${toolCount}`);
     } catch (err) {
       console.error("[Agent] Portal Connection Error:", err);
@@ -89,9 +87,12 @@ export class MyAgent extends Agent<Env, never> {
     const url = new URL(request.url);
 
     // health check point
+
     if (url.pathname.endsWith("/health")) {
       const servers = await this.mcp.listServers();
+
       const mcpTools = await this.mcp.getAITools();
+
       const toolCount = Object.keys(mcpTools).length;
 
       const status = {
@@ -110,6 +111,7 @@ export class MyAgent extends Agent<Env, never> {
 
     if (url.pathname.endsWith("/tools")) {
       const tools = await this.mcp.getAITools();
+
       return Response.json({ status: "success", tools });
     }
 
@@ -117,20 +119,25 @@ export class MyAgent extends Agent<Env, never> {
       const { prompt } = (await request.json()) as { prompt: string };
 
       let attempts = 0;
+
       let mcpToolsResult = await this.mcp.getAITools();
 
       while (Object.keys(mcpToolsResult).length === 0 && attempts < 5) {
         console.log(
-          `[Agent] Waiting for MCP discovery... attempt ${attempts + 1}`
+          `[Agent] Waiting for MCP discovery... attempt ${attempts + 1}`,
         );
+
         await new Promise((resolve) => setTimeout(resolve, 1000)); // wait 1s
+
         mcpToolsResult = await this.mcp.getAITools();
+
         attempts++;
       }
 
       const gateway = this.env.AI.gateway(this.env.GATEWAY_ID);
 
       // fetch and format MCP tools for Cloudflare Workers AI
+
       // const mcpToolsResult = await this.mcp.getAITools();
 
       const toolExecutorMap: Record<string, any> = {};
@@ -140,41 +147,61 @@ export class MyAgent extends Agent<Env, never> {
           const realName = tool.name || toolKey.split("_").slice(2).join("_");
 
           // store the whole tool object (which has the .execute function)
+
           toolExecutorMap[realName] = tool;
 
           return {
             type: "function",
+
             function: {
               name: realName,
               description: tool.description,
               parameters: tool.inputSchema.jsonSchema,
             },
           };
-        }
+        },
       );
 
       // initialize message history
-      const systemPrompt = `You are a professional production assistant. 
+
+      const systemPrompt = `You are a professional production assistant.
+
+
 
 ### CORE GUIDELINES:
+
 1. **Tool Usage:** Use tools ONLY when necessary. If general knowledge suffices, use that.
+
 2. **Capability Boundaries:** If a request requires data/tools you don't have, state that you don't have access to that specific functionality.
+
 3. **Formatting:** ALWAYS respond with well-formatted, clean, and readable Markdown. Use lists, bold text, and headers where appropriate.
 
+
+
 ### TOOL DATA PROCESSING:
+
 - NEVER output raw JSON or technical strings (like "{\\"success\\": true...}") to the user.
+
 - Your job is to extract the relevant information from tool results and present it in a helpful, conversational summary.
+
 - Example: If a tool returns a 'post_id' and a 'message', don't show the IDs; just say: "I've successfully sent your message: 'Good day' to the channel."
 
+
+
 ### ERROR HANDLING:
+
 - If a tool fails (e.g., 403 error), explain clearly that a firewall or permission restriction blocked the action.`;
 
       let messages: Message[] = [
         { role: "system", content: systemPrompt },
+
         { role: "user", content: prompt },
       ];
+
       let isRunning = true;
+
       let loopCount = 0;
+
       const MAX_LOOPS = 5;
 
       while (isRunning && loopCount < MAX_LOOPS) {
@@ -182,11 +209,15 @@ export class MyAgent extends Agent<Env, never> {
 
         const response = await gateway.run({
           provider: "workers-ai",
+
           endpoint: "@cf/meta/llama-3.1-70b-instruct",
+
           headers: {
             "Content-Type": "application/json",
+
             authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN || "LOCAL_AUTH_FALLBACK"}`,
           },
+
           query: {
             messages: messages,
             tools: tools,
@@ -195,10 +226,12 @@ export class MyAgent extends Agent<Env, never> {
         });
 
         const result = await response.json();
+
         if (!result.success)
           return Response.json(
             { error: "Gateway Error", details: result },
-            { status: 500 }
+
+            { status: 500 },
           );
 
         console.log("result: ", result);
@@ -207,19 +240,24 @@ export class MyAgent extends Agent<Env, never> {
 
         if (result.result.response) {
           // if there is a text response, use it
+
           assistantMessage = {
             role: "assistant",
+
             content: result.result.response,
           };
         } else if (result.messages && result.messages.length > 0) {
           // if the gateway returned a message history, take the last one
+
           assistantMessage = { ...result.messages[result.messages.length - 1] };
         } else {
           // create a clean assistant message object
+
           assistantMessage = { role: "assistant", content: "" };
         }
 
         // attach tool_calls if they exist
+
         if (result.result.tool_calls) {
           assistantMessage.tool_calls = result.result.tool_calls;
         }
@@ -231,10 +269,12 @@ export class MyAgent extends Agent<Env, never> {
         if (result.result.tool_calls && result.result.tool_calls.length > 0) {
           for (const toolCall of result.result.tool_calls) {
             const { name, arguments: args } = toolCall;
+
             let parsedArgs = typeof args === "string" ? JSON.parse(args) : args;
 
             for (const key in parsedArgs) {
               const val = parsedArgs[key];
+
               if (
                 typeof val === "string" &&
                 !isNaN(Number(val)) &&
@@ -245,9 +285,11 @@ export class MyAgent extends Agent<Env, never> {
             }
 
             const tool = toolExecutorMap[name];
+
             if (tool) {
               try {
                 const toolOutput = await tool.execute(parsedArgs);
+
                 messages.push({
                   role: "tool",
                   tool_call_id: toolCall.id,
@@ -260,8 +302,7 @@ export class MyAgent extends Agent<Env, never> {
                   tool_call_id: toolCall.id,
                   name: name,
                   content: JSON.stringify({
-                    error:
-                      "Access Denied (403). The Mattermost server is blocking this request via Cloudflare WAF.",
+                    error: "Error occured",
                     raw_detail: e.message,
                   }),
                 });
@@ -275,6 +316,7 @@ export class MyAgent extends Agent<Env, never> {
 
       return Response.json({
         status: "success",
+
         answer: messages[messages.length - 1].content,
       });
     }
@@ -286,9 +328,11 @@ export class MyAgent extends Agent<Env, never> {
 export default {
   async fetch(request: Request, env: Env) {
     const agentResponse = await routeAgentRequest(request, env);
+
     if (agentResponse) return agentResponse;
 
     const agent = await getAgentByName(env.MyAgent, "default");
+
     return agent.fetch(request);
   },
 } satisfies ExportedHandler<Env>;
