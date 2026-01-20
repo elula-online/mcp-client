@@ -36,6 +36,7 @@ export class MyAgent extends Agent<Env, never> {
     const portalUrl = this.env.MCP_PORTAL_URL;
 
     try {
+
       const result = await this.addMcpServer(
         "SystemPortal",
         portalUrl,
@@ -52,25 +53,18 @@ export class MyAgent extends Agent<Env, never> {
         }
       );
 
-      // If we get tools, the session is valid and we can ignore the auth warning.
       let toolCount = 0;
       try {
         const tools = await this.mcp.getAITools();
         toolCount = Object.keys(tools).length;
-      } catch (e) {
-        // Ignore tool fetch errors during check
-      }
+      } catch (e) { }
 
       if (result.state === "authenticating" && toolCount === 0) {
-        console.warn(
-          "[Agent] Auth required. Please login:",
-          (result as any).authUrl
-        );
+        console.warn("[Agent] Auth required:", (result as any).authUrl);
         return;
       }
 
       console.log(`[Agent] Connected! ID: ${result.id}`);
-      console.log(`[Agent] Success! Found tools: ${toolCount}`);
     } catch (err) {
       console.error("[Agent] Portal Connection Error:", err);
     }
@@ -79,60 +73,45 @@ export class MyAgent extends Agent<Env, never> {
   async onRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // health check point
+    // health check
     if (url.pathname.endsWith("/health")) {
       const servers = await this.mcp.listServers();
       const mcpTools = await this.mcp.getAITools();
       const toolCount = Object.keys(mcpTools).length;
-
-      const status = {
+      return Response.json({
         status: toolCount > 0 ? "healthy" : "initializing",
         agent_instance: this.name,
         tools_discovered: toolCount,
-        servers: servers.map((s: any) => ({
-          name: s.name,
-          state: s.state || "unknown",
-        })),
+        servers: servers.map((s: any) => ({ name: s.name, state: s.state || "unknown" })),
         timestamp: new Date().toISOString(),
-      };
-
-      return Response.json(status, { status: toolCount > 0 ? 200 : 503 });
+      }, { status: toolCount > 0 ? 200 : 503 });
     }
 
+    // tools endpoint
     if (url.pathname.endsWith("/tools")) {
       const tools = await this.mcp.getAITools();
       return Response.json({ status: "success", tools });
     }
 
+    // chat endpoint
     if (request.method === "POST" && url.pathname.endsWith("/chat")) {
       const { prompt } = (await request.json()) as { prompt: string };
 
       let attempts = 0;
       let mcpToolsResult = await this.mcp.getAITools();
-
       while (Object.keys(mcpToolsResult).length === 0 && attempts < 5) {
-        console.log(
-          `[Agent] Waiting for MCP discovery... attempt ${attempts + 1}`
-        );
-        await new Promise((resolve) => setTimeout(resolve, 1000)); // wait 1s
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         mcpToolsResult = await this.mcp.getAITools();
         attempts++;
       }
 
       const gateway = this.env.AI.gateway(this.env.GATEWAY_ID);
-
-      // fetch and format MCP tools for Cloudflare Workers AI
-      // const mcpToolsResult = await this.mcp.getAITools();
-
       const toolExecutorMap: Record<string, any> = {};
 
       const tools = Object.entries(mcpToolsResult).map(
         ([toolKey, tool]: [string, any]) => {
           const realName = tool.name || toolKey.split("_").slice(2).join("_");
-
-          // store the whole tool object (which has the .execute function)
           toolExecutorMap[realName] = tool;
-
           return {
             type: "function",
             function: {
@@ -144,29 +123,30 @@ export class MyAgent extends Agent<Env, never> {
         }
       );
 
-      // initialize message history
-      const systemPrompt = `You are a professional production assistant. 
+      const systemPrompt = `You are a professional production assistant.
 
-### CORE GUIDELINES:
-1. **Tool Usage:** Use tools ONLY when necessary. If general knowledge suffices, use that.
-2. **Capability Boundaries:** If a request requires data/tools you don't have, state that you don't have access to that specific functionality.
-3. **Formatting:** ALWAYS respond with well-formatted, clean, and readable Markdown. Use lists, bold text, and headers where appropriate.
+CORE GUIDELINES:
+1. One-Shot Action: Once you send a message or perform an action, STOP. Do not repeat the same action unless explicitly asked.
+2. List Formatting: When asked for a list (e.g., channels), YOU MUST format it as a clean Markdown list with each item on a new line.
+   - Correct: 
+     Channel A
+     Channel B
+   - Incorrect: * Channel A * Channel B
+3. Response Style: Be concise. Don't show JSON. Just say "I've done X" or "Here is the list:".
 
-### TOOL DATA PROCESSING:
-- NEVER output raw JSON or technical strings (like "{\\"success\\": true...}") to the user.
-- Your job is to extract the relevant information from tool results and present it in a helpful, conversational summary.
-- Example: If a tool returns a 'post_id' and a 'message', don't show the IDs; just say: "I've successfully sent your message: 'Good day' to the channel."
-
-### ERROR HANDLING:
-- If a tool fails (e.g., 403 error), explain clearly that a firewall or permission restriction blocked the action.`;
+ERROR HANDLING:
+- If a tool fails, explain why clearly.`;
 
       let messages: Message[] = [
         { role: "system", content: systemPrompt },
         { role: "user", content: prompt },
       ];
+
       let isRunning = true;
       let loopCount = 0;
       const MAX_LOOPS = 5;
+      
+      const executedActions = new Set<string>();
 
       while (isRunning && loopCount < MAX_LOOPS) {
         loopCount++;
@@ -186,51 +166,54 @@ export class MyAgent extends Agent<Env, never> {
         });
 
         const result = await response.json();
-        if (!result.success)
-          return Response.json(
-            { error: "Gateway Error", details: result },
-            { status: 500 }
-          );
-
-        console.log("result: ", result);
+        if (!result.success) {
+             return Response.json({ error: "Gateway Error", details: result }, { status: 500 });
+        }
 
         let assistantMessage: Message;
 
         if (result.result.response) {
-          // if there is a text response, use it
-          assistantMessage = {
-            role: "assistant",
-            content: result.result.response,
-          };
+          assistantMessage = { role: "assistant", content: result.result.response };
         } else if (result.messages && result.messages.length > 0) {
-          // if the gateway returned a message history, take the last one
           assistantMessage = { ...result.messages[result.messages.length - 1] };
         } else {
-          // create a clean assistant message object
           assistantMessage = { role: "assistant", content: "" };
         }
 
-        // attach tool_calls if they exist
         if (result.result.tool_calls) {
           assistantMessage.tool_calls = result.result.tool_calls;
         }
 
         messages.push(assistantMessage);
 
-        console.log("assistantMessage: ", assistantMessage);
-
+        // process Tools
         if (result.result.tool_calls && result.result.tool_calls.length > 0) {
           for (const toolCall of result.result.tool_calls) {
             const { name, arguments: args } = toolCall;
-            let parsedArgs = typeof args === "string" ? JSON.parse(args) : args;
+            
+            // create a unique signature for this action: "toolName:arg1,arg2"
+            const actionSignature = `${name}:${JSON.stringify(args)}`;
+            
+            if (executedActions.has(actionSignature)) {
+                console.warn(`[Agent] blocked duplicate action: ${actionSignature}`);
+                messages.push({
+                    role: "tool",
+                    tool_call_id: toolCall.id,
+                    name: name,
+                    content: JSON.stringify({ error: "Action skipped: You have already performed this action in this conversation." })
+                });
+                continue;
+            }
+            
+            // mark as executed
+            executedActions.add(actionSignature);
+            // -------------------------------------
 
+            let parsedArgs = typeof args === "string" ? JSON.parse(args) : args;
+          
             for (const key in parsedArgs) {
               const val = parsedArgs[key];
-              if (
-                typeof val === "string" &&
-                !isNaN(Number(val)) &&
-                val.trim() !== ""
-              ) {
+              if (typeof val === "string" && !isNaN(Number(val)) && val.trim() !== "") {
                 parsedArgs[key] = Number(val);
               }
             }
@@ -250,18 +233,42 @@ export class MyAgent extends Agent<Env, never> {
                   role: "tool",
                   tool_call_id: toolCall.id,
                   name: name,
-                  content: JSON.stringify({
-                    error:
-                      "Access Denied (403). The Mattermost server is blocking this request via Cloudflare WAF.",
-                    raw_detail: e.message,
-                  }),
+                  content: JSON.stringify({ error: "Tool Error", detail: e.message }),
                 });
               }
             }
           }
         } else {
+          // No tools called
           isRunning = false;
         }
+      }
+
+      // If the loop ended but the last message was a TOOL result, the user will see JSON.
+      // We must force one last "Assistant" turn to summarize the tool result.
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg.role === "tool") {
+          console.log("[Agent] Generating final summary...");
+          const summaryResponse = await gateway.run({
+            provider: "workers-ai",
+            endpoint: "@cf/meta/llama-3.1-70b-instruct",
+            headers: {
+                "Content-Type": "application/json",
+                authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
+            },
+            query: {
+                messages: messages, // Send the full history including the tool result
+                // We do NOT send tools here, forcing it to just talk
+                tools: [], 
+            },
+          });
+          const summaryJson = await summaryResponse.json();
+          if (summaryJson.result?.response) {
+              return Response.json({
+                  status: "success",
+                  answer: summaryJson.result.response 
+              });
+          }
       }
 
       return Response.json({
