@@ -209,12 +209,9 @@ export class MyAgent extends Agent<Env, never> {
 
         const response = await gateway.run({
           provider: "workers-ai",
-
           endpoint: "@cf/meta/llama-3.1-70b-instruct",
-
           headers: {
             "Content-Type": "application/json",
-
             authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN || "LOCAL_AUTH_FALLBACK"}`,
           },
 
@@ -240,24 +237,19 @@ export class MyAgent extends Agent<Env, never> {
 
         if (result.result.response) {
           // if there is a text response, use it
-
           assistantMessage = {
             role: "assistant",
-
             content: result.result.response,
           };
         } else if (result.messages && result.messages.length > 0) {
           // if the gateway returned a message history, take the last one
-
           assistantMessage = { ...result.messages[result.messages.length - 1] };
         } else {
           // create a clean assistant message object
-
           assistantMessage = { role: "assistant", content: "" };
         }
 
         // attach tool_calls if they exist
-
         if (result.result.tool_calls) {
           assistantMessage.tool_calls = result.result.tool_calls;
         }
