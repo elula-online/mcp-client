@@ -36,6 +36,15 @@ export class MyAgent extends Agent<Env, never> {
     const portalUrl = this.env.MCP_PORTAL_URL;
 
     try {
+
+      const existingServers = await this.mcp.listServers();
+      if (existingServers.length > 0) {
+         for (const server of existingServers) {
+             // Optional: only remove if it matches "SystemPortal" to be safe
+             if (server.name === "SystemPortal") await this.mcp.removeServer(server.name);
+         }
+      }
+
       const result = await this.addMcpServer(
         "SystemPortal",
         portalUrl,
