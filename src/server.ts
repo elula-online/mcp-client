@@ -104,6 +104,7 @@ export class MyAgent extends Agent<Env, never> {
 
       let attempts = 0;
       let mcpToolsResult = await this.mcp.getAITools();
+      
       while (Object.keys(mcpToolsResult).length === 0 && attempts < 5) {
         await new Promise((resolve) => setTimeout(resolve, 1000));
         mcpToolsResult = await this.mcp.getAITools();
@@ -153,7 +154,7 @@ ERROR HANDLING:
 
       const executedActions = new Set<string>();
 
-      while (isRunning && loopCount < MAX_LOOPS) {
+    while (isRunning && loopCount < MAX_LOOPS) {
         loopCount++;
 
         const response = await gateway.run({
@@ -161,7 +162,7 @@ ERROR HANDLING:
           endpoint: "@cf/meta/llama-3.1-70b-instruct",
           headers: {
             "Content-Type": "application/json",
-            authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN || "LOCAL_AUTH_FALLBACK"}`,
+            authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
           },
           query: {
             messages: messages,
@@ -171,20 +172,11 @@ ERROR HANDLING:
         });
 
         const result = await response.json();
-        if (!result.success)
-          return Response.json(
-            { error: "Gateway Error", details: result },
-            { status: 500 },
-          );
+        if (!result.success) return Response.json({ error: "Gateway Error", details: result }, { status: 500 });
 
         let assistantMessage: Message;
         if (result.result.response) {
-          assistantMessage = {
-            role: "assistant",
-            content: result.result.response,
-          };
-        } else if (result.messages && result.messages.length > 0) {
-          assistantMessage = { ...result.messages[result.messages.length - 1] };
+          assistantMessage = { role: "assistant", content: result.result.response };
         } else {
           assistantMessage = { role: "assistant", content: "" };
         }
@@ -193,37 +185,28 @@ ERROR HANDLING:
           assistantMessage.tool_calls = result.result.tool_calls;
         }
 
+        // --- CHECK FOR REPETITION BEFORE PUSHING ---
+        if (result.result.tool_calls && result.result.tool_calls.length > 0) {
+            const firstCall = result.result.tool_calls[0];
+            const actionSignature = `${firstCall.name}:${JSON.stringify(firstCall.arguments)}`;
+            
+            if (executedActions.has(actionSignature)) {
+                console.log(`[Agent] Duplicate detected: ${actionSignature}. Moving to summary.`);
+                isRunning = false;
+                break; // Exit BEFORE pushing the empty assistant message
+            }
+        }
+
         messages.push(assistantMessage);
 
-        // process Tools
         if (result.result.tool_calls && result.result.tool_calls.length > 0) {
           for (const toolCall of result.result.tool_calls) {
             const { name, arguments: args } = toolCall;
             const actionSignature = `${name}:${JSON.stringify(args)}`;
-
-            if (executedActions.has(actionSignature)) {
-              console.log(
-                `[Agent] LLM tried to repeat ${name}. Stopping loop to summarize.`,
-              );
-              isRunning = false;
-              break; // exit the toolcall loop
-            }
-
-            // mark as executed
+            
             executedActions.add(actionSignature);
 
             let parsedArgs = typeof args === "string" ? JSON.parse(args) : args;
-            for (const key in parsedArgs) {
-              const val = parsedArgs[key];
-              if (
-                typeof val === "string" &&
-                !isNaN(Number(val)) &&
-                val.trim() !== ""
-              ) {
-                parsedArgs[key] = Number(val);
-              }
-            }
-
             const tool = toolExecutorMap[name];
             if (tool) {
               try {
@@ -239,10 +222,7 @@ ERROR HANDLING:
                   role: "tool",
                   tool_call_id: toolCall.id,
                   name: name,
-                  content: JSON.stringify({
-                    error: "Tool Error",
-                    detail: e.message,
-                  }),
+                  content: JSON.stringify({ error: "Tool Error", detail: e.message }),
                 });
               }
             }
@@ -254,33 +234,33 @@ ERROR HANDLING:
 
       // If the loop ended but the last message was a TOOL result, the user will see JSON.
       // We must force one last "Assistant" turn to summarize the tool result.
-      const lastMsg = messages[messages.length - 1];
-      if (lastMsg.role === "tool") {
-        console.log("[Agent] Generating final summary...");
-        const summaryResponse = await gateway.run({
-          provider: "workers-ai",
-          endpoint: "@cf/meta/llama-3.1-70b-instruct",
-          headers: {
-            "Content-Type": "application/json",
-            authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
-          },
-          query: {
-            messages: messages, 
-            tools: [],
-          },
-        });
-        const summaryJson = await summaryResponse.json();
-        if (summaryJson.result?.response) {
-          return Response.json({
-            status: "success",
-            answer: summaryJson.result.response,
+     const lastMessage = messages[messages.length - 1];
+      
+      // If we ended on a tool result, OR an empty assistant message (from a break), force a summary
+      if (lastMessage.role === "tool" || (lastMessage.role === "assistant" && !lastMessage.content)) {
+          console.log("[Agent] Finalizing response for user...");
+          const summaryResponse = await gateway.run({
+            provider: "workers-ai",
+            endpoint: "@cf/meta/llama-3.1-70b-instruct",
+            headers: {
+                "Content-Type": "application/json",
+                authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
+            },
+            query: {
+                messages: messages,
+                tools: [], // Force no more tool calls
+            },
           });
-        }
+          const summaryJson = await summaryResponse.json();
+          return Response.json({
+              status: "success",
+              answer: summaryJson.result?.response || "Task completed successfully."
+          });
       }
 
       return Response.json({
         status: "success",
-        answer: messages[messages.length - 1].content,
+        answer: lastMessage.content,
       });
     }
 
