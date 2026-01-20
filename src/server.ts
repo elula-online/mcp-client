@@ -36,7 +36,6 @@ export class MyAgent extends Agent<Env, never> {
     const portalUrl = this.env.MCP_PORTAL_URL;
 
     try {
-
       const result = await this.addMcpServer(
         "SystemPortal",
         portalUrl,
@@ -50,14 +49,14 @@ export class MyAgent extends Agent<Env, never> {
               "CF-Access-Client-Secret": this.env.CFAccessClientSecret,
             },
           },
-        }
+        },
       );
 
       let toolCount = 0;
       try {
         const tools = await this.mcp.getAITools();
         toolCount = Object.keys(tools).length;
-      } catch (e) { }
+      } catch (e) {}
 
       if (result.state === "authenticating" && toolCount === 0) {
         console.warn("[Agent] Auth required:", (result as any).authUrl);
@@ -78,13 +77,19 @@ export class MyAgent extends Agent<Env, never> {
       const servers = await this.mcp.listServers();
       const mcpTools = await this.mcp.getAITools();
       const toolCount = Object.keys(mcpTools).length;
-      return Response.json({
-        status: toolCount > 0 ? "healthy" : "initializing",
-        agent_instance: this.name,
-        tools_discovered: toolCount,
-        servers: servers.map((s: any) => ({ name: s.name, state: s.state || "unknown" })),
-        timestamp: new Date().toISOString(),
-      }, { status: toolCount > 0 ? 200 : 503 });
+      return Response.json(
+        {
+          status: toolCount > 0 ? "healthy" : "initializing",
+          agent_instance: this.name,
+          tools_discovered: toolCount,
+          servers: servers.map((s: any) => ({
+            name: s.name,
+            state: s.state || "unknown",
+          })),
+          timestamp: new Date().toISOString(),
+        },
+        { status: toolCount > 0 ? 200 : 503 },
+      );
     }
 
     // tools endpoint
@@ -120,7 +125,7 @@ export class MyAgent extends Agent<Env, never> {
               parameters: tool.inputSchema.jsonSchema,
             },
           };
-        }
+        },
       );
 
       const systemPrompt = `You are a professional production assistant.
@@ -145,7 +150,7 @@ ERROR HANDLING:
       let isRunning = true;
       let loopCount = 0;
       const MAX_LOOPS = 5;
-      
+
       const executedActions = new Set<string>();
 
       while (isRunning && loopCount < MAX_LOOPS) {
@@ -166,14 +171,18 @@ ERROR HANDLING:
         });
 
         const result = await response.json();
-        if (!result.success) {
-             return Response.json({ error: "Gateway Error", details: result }, { status: 500 });
-        }
+        if (!result.success)
+          return Response.json(
+            { error: "Gateway Error", details: result },
+            { status: 500 },
+          );
 
         let assistantMessage: Message;
-
         if (result.result.response) {
-          assistantMessage = { role: "assistant", content: result.result.response };
+          assistantMessage = {
+            role: "assistant",
+            content: result.result.response,
+          };
         } else if (result.messages && result.messages.length > 0) {
           assistantMessage = { ...result.messages[result.messages.length - 1] };
         } else {
@@ -190,30 +199,27 @@ ERROR HANDLING:
         if (result.result.tool_calls && result.result.tool_calls.length > 0) {
           for (const toolCall of result.result.tool_calls) {
             const { name, arguments: args } = toolCall;
-            
-            // create a unique signature for this action: "toolName:arg1,arg2"
             const actionSignature = `${name}:${JSON.stringify(args)}`;
-            
+
             if (executedActions.has(actionSignature)) {
-                console.warn(`[Agent] blocked duplicate action: ${actionSignature}`);
-                messages.push({
-                    role: "tool",
-                    tool_call_id: toolCall.id,
-                    name: name,
-                    content: JSON.stringify({ error: "Action skipped: You have already performed this action in this conversation." })
-                });
-                continue;
+              console.log(
+                `[Agent] LLM tried to repeat ${name}. Stopping loop to summarize.`,
+              );
+              isRunning = false;
+              break; // exit the toolcall loop
             }
-            
+
             // mark as executed
             executedActions.add(actionSignature);
-            // -------------------------------------
 
             let parsedArgs = typeof args === "string" ? JSON.parse(args) : args;
-          
             for (const key in parsedArgs) {
               const val = parsedArgs[key];
-              if (typeof val === "string" && !isNaN(Number(val)) && val.trim() !== "") {
+              if (
+                typeof val === "string" &&
+                !isNaN(Number(val)) &&
+                val.trim() !== ""
+              ) {
                 parsedArgs[key] = Number(val);
               }
             }
@@ -233,13 +239,15 @@ ERROR HANDLING:
                   role: "tool",
                   tool_call_id: toolCall.id,
                   name: name,
-                  content: JSON.stringify({ error: "Tool Error", detail: e.message }),
+                  content: JSON.stringify({
+                    error: "Tool Error",
+                    detail: e.message,
+                  }),
                 });
               }
             }
           }
         } else {
-          // No tools called
           isRunning = false;
         }
       }
@@ -248,27 +256,26 @@ ERROR HANDLING:
       // We must force one last "Assistant" turn to summarize the tool result.
       const lastMsg = messages[messages.length - 1];
       if (lastMsg.role === "tool") {
-          console.log("[Agent] Generating final summary...");
-          const summaryResponse = await gateway.run({
-            provider: "workers-ai",
-            endpoint: "@cf/meta/llama-3.1-70b-instruct",
-            headers: {
-                "Content-Type": "application/json",
-                authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
-            },
-            query: {
-                messages: messages, // Send the full history including the tool result
-                // We do NOT send tools here, forcing it to just talk
-                tools: [], 
-            },
+        console.log("[Agent] Generating final summary...");
+        const summaryResponse = await gateway.run({
+          provider: "workers-ai",
+          endpoint: "@cf/meta/llama-3.1-70b-instruct",
+          headers: {
+            "Content-Type": "application/json",
+            authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN}`,
+          },
+          query: {
+            messages: messages, 
+            tools: [],
+          },
+        });
+        const summaryJson = await summaryResponse.json();
+        if (summaryJson.result?.response) {
+          return Response.json({
+            status: "success",
+            answer: summaryJson.result.response,
           });
-          const summaryJson = await summaryResponse.json();
-          if (summaryJson.result?.response) {
-              return Response.json({
-                  status: "success",
-                  answer: summaryJson.result.response 
-              });
-          }
+        }
       }
 
       return Response.json({
