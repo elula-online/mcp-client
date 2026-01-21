@@ -10,6 +10,7 @@ type Env = {
 
   HOST: string;
   MCP_PORTAL_URL: string;
+  MCP_SERVER_URL: string; // Added: The actual MCP server URL for audience validation
   ACCOUNT_ID: string;
   GATEWAY_ID: string;
   AI: any;
@@ -78,10 +79,11 @@ export class MyAgent extends Agent<Env, never> {
 
       console.log(`[Agent] Connecting to MCP portal: ${portalUrl}`);
 
+      // FIXED: Use MCP_SERVER_URL for audience validation instead of HOST
       const result = await this.addMcpServer(
         "SystemMCPportal",
         portalUrl,
-        this.env.HOST,
+        this.env.MCP_SERVER_URL, // ✅ Fixed: Use the actual MCP server URL for audience
         undefined,
         {
           transport: {
