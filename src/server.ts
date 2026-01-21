@@ -57,11 +57,12 @@ export class MyAgent extends Agent<Env, never> {
         }
       }
       
-      // Clean up any failed or stale connections before adding new one
+      // Clean up any stale or failed connections
+      // This includes: failed, error, authenticating, AND unknown states
       let cleanedCount = 0;
       for (const server of existingServers) {
-        if (server.state === "failed" || server.state === "error" || server.state === "authenticating") {
-          console.log(`[Agent] Cleaning up ${server.state} connection: ${server.id}`);
+        if (server.state !== "connected") {
+          console.log(`[Agent] Cleaning up ${server.state} connection: ${server.name} (${server.id})`);
           try {
             await this.mcp.removeServer(server.id);
             cleanedCount++;
