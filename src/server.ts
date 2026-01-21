@@ -57,7 +57,7 @@ export class MyAgent extends Agent<Env, never> {
         }
       }
       
-      // Clean up any stale or failed connections
+      // CRITICAL FIX: Clean up ANY non-connected server 
       // This includes: failed, error, authenticating, AND unknown states
       let cleanedCount = 0;
       for (const server of existingServers) {
@@ -86,10 +86,10 @@ export class MyAgent extends Agent<Env, never> {
         {
           transport: {
             type: "streamable-http",
-            headers: {
-              "CF-Access-Client-Id": this.env.CFAccessClientId,
-              "CF-Access-Client-Secret": this.env.CFAccessClientSecret,
-            },
+             headers: {
+               "CF-Access-Client-Id": this.env.CFAccessClientId,
+               "CF-Access-Client-Secret": this.env.CFAccessClientSecret,
+             },
           },
         },
       );
