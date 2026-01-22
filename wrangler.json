@@ -7,13 +7,13 @@
     "binding": "AI"
   },
   "vars": {
-    "HOST": "https://mcp.elula.cloud",
+    "HOST": "mcp.elula.cloud",
     "MCP_PORTAL_URL": "https://mcp.elula.cloud/mcp",
     "GATEWAY_ID":"paraat-001",
     "ACCOUNT_ID":"2f3a54283c593ca9fb546474ca1e5c68",
     "CLOUDFLARE_API_TOKEN": "ZI3vyH40d-TjQooJ-jPbDzsJwjndhQWayaXU6xbe",
-    "CFAccessClientId": "253b10e70a5465cda74c2fad58cdff57.access",
-    "CFAccessClientSecret": "e4207fc615639de66899a6d05add18c1a1bc966814e045070af0be3d6242994a"
+    "CFAccessClientId": "0cfd55c8654eace333c7fdb16c43843f.access",
+    "CFAccessClientSecret": "46a199c027114c522a7a7b2823b3ec687d5b09d1b1c7ced3ba15a242130f0a6b"
   },
   "durable_objects": {
     "bindings": [
