@@ -58,21 +58,21 @@ export class MyAgent extends Agent<Env, never> {
 
       console.log(`[Agent] Connecting to MCP Portal...`);
 
-      const result = await this.addMcpServer(
-        "SystemMCPportal",
-        portalUrl,
-        this.env.MCP_SERVER_URL,
-        undefined,
-        {
-          transport: {
-            type: "streamable-http",
-            headers: {
-              "CF-Access-Client-Id": this.env.CFAccessClientId,
-              "CF-Access-Client-Secret": this.env.CFAccessClientSecret,
-            },
-          },
-        },
-      );
+const result = await this.addMcpServer(
+  "SystemMCPportal",
+  this.env.MCP_PORTAL_URL,     // https://mcp.elula.cloud/mcp
+  this.env.MCP_PORTAL_URL,     // ✅ Audience should ALSO be the portal URL
+  undefined,
+  {
+    transport: {
+      type: "streamable-http",
+      headers: {
+        "CF-Access-Client-Id": this.env.CFAccessClientId,
+        "CF-Access-Client-Secret": this.env.CFAccessClientSecret,
+      },
+    },
+  },
+);
 
       if (result.state !== "connected") {
         console.error(`[Agent] Connection failed: ${result.state}`);
