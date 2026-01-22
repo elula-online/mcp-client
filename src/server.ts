@@ -17,6 +17,7 @@ type Env = {
   CLOUDFLARE_API_TOKEN: string;
   CFAccessClientId: string;
   CFAccessClientSecret: string;
+  AUD: string;
 };
 
 type Message =
@@ -88,10 +89,11 @@ export class MyAgent extends Agent<Env, never> {
         {
           transport: {
             type: "streamable-http",
-             headers: {
-               "CF-Access-Client-Id": this.env.CFAccessClientId,
-               "CF-Access-Client-Secret": this.env.CFAccessClientSecret,
-             },
+            headers: {
+              "CF-Access-Client-Id": this.env.CFAccessClientId,
+              "CF-Access-Client-Secret": this.env.CFAccessClientSecret,
+              "CF-Access-Audience": this.env.AUD,
+            },
           },
         },
       );
