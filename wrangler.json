@@ -12,8 +12,8 @@
     "GATEWAY_ID":"paraat-001",
     "ACCOUNT_ID":"2f3a54283c593ca9fb546474ca1e5c68",
     "CLOUDFLARE_API_TOKEN": "ZI3vyH40d-TjQooJ-jPbDzsJwjndhQWayaXU6xbe",
-    "CFAccessClientId": "786bd2513518b0a09803cb572d988aa1.access",
-    "CFAccessClientSecret": "ee4c2375baf16ceb2752a0681699320dd52c78477144a48beb238c81aaec1180"
+    "CFAccessClientId": "01621d93fe6561fec919df40bd61b032.access",
+    "CFAccessClientSecret": "e600129db330315c8cf30e8b9ee852ec9016d93f469c0991665de1a066a742a0"
   },
   "durable_objects": {
     "bindings": [
