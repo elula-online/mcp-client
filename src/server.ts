@@ -211,18 +211,13 @@ export class MyAgent extends Agent<Env, never> {
 
         // Check connection state before attempting to use tools
         const servers = await this.mcp.listServers();
-        console.log("Servers: ", servers);
         const connectedServers = servers.filter(
           (s: any) => s.name === "SystemMCPportal" && s.id,
         );
 
         if (connectedServers.length === 0) {
           console.warn("[Chat] No connected MCP servers available");
-
-          // Try to reconnect
           await this.onStart();
-
-          // Check again
           const serversAfterReconnect = await this.mcp.listServers();
           const reconnectedServers = serversAfterReconnect.filter(
             (s: any) => s.state === "connected",
@@ -250,20 +245,9 @@ export class MyAgent extends Agent<Env, never> {
           attempts < MAX_ATTEMPTS
         ) {
           try {
-            // Force a tool refresh
             mcpToolsResult = await this.mcp.getAITools();
-
-            if (Object.keys(mcpToolsResult).length > 0) {
-              console.log(
-                `[Chat] Successfully discovered ${Object.keys(mcpToolsResult).length} tools.`,
-              );
-              break;
-            }
-
-            console.log(
-              `[Chat] Tools not found yet. Attempt ${attempts + 1}/${MAX_ATTEMPTS}`,
-            );
-            await new Promise((resolve) => setTimeout(resolve, 1500)); // Increase wait to 1.5s
+            if (Object.keys(mcpToolsResult).length > 0) break;
+            await new Promise((resolve) => setTimeout(resolve, 1500));
           } catch (error) {
             console.error(`[Chat] Tool fetch error:`, error);
           }
@@ -272,27 +256,18 @@ export class MyAgent extends Agent<Env, never> {
 
         if (Object.keys(mcpToolsResult).length === 0) {
           return Response.json(
-            {
-              error: "No MCP tools available after retry",
-              attempts: attempts,
-              suggestion:
-                "The MCP server may not have any tools configured or is still initializing.",
-            },
+            { error: "No MCP tools available after retry" },
             { status: 503 },
           );
         }
 
         const gateway = this.env.AI.gateway(this.env.GATEWAY_ID);
-
-        // Prepare tools for Cloudflare Workers AI
         const toolExecutorMap: Record<string, any> = {};
 
         const tools = Object.entries(mcpToolsResult).map(
           ([toolKey, tool]: [string, any]) => {
             const displayName = tool.name || toolKey;
-
             toolExecutorMap[displayName] = tool;
-
             return {
               type: "function",
               function: {
@@ -304,28 +279,14 @@ export class MyAgent extends Agent<Env, never> {
           },
         );
 
-        // Initialize message history
-        const systemPrompt = `You are a professional production assistant.
-
-### CORE GUIDELINES:
-
-1. **Tool Usage:** Use tools ONLY when necessary. If general knowledge suffices, use that.
-
-2. **Capability Boundaries:** If a request requires data/tools you don't have, state that you don't have access to that specific functionality.
-
-3. **Formatting:** ALWAYS respond with well-formatted, clean, and readable Markdown. Use lists, bold text, and headers where appropriate.
-
-### TOOL DATA PROCESSING:
-
-- NEVER output raw JSON or technical strings (like "{\\"success\\": true...}") to the user.
-
-- Your job is to extract the relevant information from tool results and present it in a helpful, conversational summary.
-
-- Example: If a tool returns a 'post_id' and a 'message', don't show the IDs; just say: "I've successfully sent your message: 'Good day' to the channel."
-
-### ERROR HANDLING:
-
-- If a tool fails (e.g., 403 error), explain clearly that a firewall or permission restriction blocked the action.`;
+        const systemPrompt = `You are Paraat AI, a professional production assistant. 
+### YOUR GOAL:
+Provide clear, human-readable summaries.
+### RESPONSE RULES:
+1. NEVER show raw JSON or technical IDs.
+2. Use Markdown (**bold**, lists, ### headers).
+3. If you just performed an action (like sending a message), confirm it clearly.
+4. Always end with a helpful next step.`;
 
         let messages: Message[] = [
           { role: "system", content: systemPrompt },
@@ -335,6 +296,8 @@ export class MyAgent extends Agent<Env, never> {
         let isRunning = true;
         let loopCount = 0;
         const MAX_LOOPS = 5;
+        // Safeguard: Track tools to prevent duplicate executions (like double-posting)
+        const executedTools = new Set<string>();
 
         while (isRunning && loopCount < MAX_LOOPS) {
           loopCount++;
@@ -346,7 +309,6 @@ export class MyAgent extends Agent<Env, never> {
               "Content-Type": "application/json",
               authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN || "LOCAL_AUTH_FALLBACK"}`,
             },
-
             query: {
               messages: messages,
               tools: tools,
@@ -355,107 +317,98 @@ export class MyAgent extends Agent<Env, never> {
           });
 
           const result = await response.json();
-
           if (!result.success) {
-            console.error("[Chat] Gateway error:", result);
             return Response.json(
               { error: "Gateway Error", details: result },
               { status: 500 },
             );
           }
 
-          console.log(`[Chat] Loop ${loopCount} result:`, result);
+          const toolCalls = result.result.tool_calls || [];
 
-          let assistantMessage: Message;
-
-          if (result.result.response) {
-            // If there is a text response, use it
-            assistantMessage = {
-              role: "assistant",
-              content: result.result.response,
-            };
-          } else if (result.messages && result.messages.length > 0) {
-            // If the gateway returned a message history, take the last one
-            assistantMessage = {
-              ...result.messages[result.messages.length - 1],
-            };
-          } else {
-            // Create a clean assistant message object
-            assistantMessage = { role: "assistant", content: "" };
-          }
-
-          // Attach tool_calls if they exist
-          if (result.result.tool_calls) {
-            assistantMessage.tool_calls = result.result.tool_calls;
-          }
+          // Prepare Assistant Message
+          let assistantMessage: Message = {
+            role: "assistant",
+            content: result.result.response || "",
+          };
+          if (toolCalls.length > 0) assistantMessage.tool_calls = toolCalls;
 
           messages.push(assistantMessage);
 
-          console.log(`[Chat] Assistant message:`, assistantMessage);
+          // If no tool calls, the LLM is providing a final text answer
+          if (toolCalls.length === 0) {
+            isRunning = false;
+            break;
+          }
 
-          if (result.result.tool_calls && result.result.tool_calls.length > 0) {
-            for (const toolCall of result.result.tool_calls) {
-              const { name, arguments: args } = toolCall;
+          // Process each tool call
+          for (const toolCall of toolCalls) {
+            const { name, arguments: args, id: callId } = toolCall;
 
-              let parsedArgs =
-                typeof args === "string" ? JSON.parse(args) : args;
+            // PREVENT DUPLICATE TOOL EXECUTION
+            if (executedTools.has(name)) {
+              console.warn(`[Chat] Blocking duplicate execution of: ${name}`);
+              messages.push({
+                role: "tool",
+                tool_call_id: callId,
+                name: name,
+                content: JSON.stringify({
+                  error: "Action already performed.",
+                  instruction:
+                    "You have already called this tool. Do not call it again. Please summarize the outcome for the user based on previous data.",
+                }),
+              });
+              continue; // Skip actual execution
+            }
 
-              // Convert numeric strings to numbers
-              for (const key in parsedArgs) {
-                const val = parsedArgs[key];
+            const tool = toolExecutorMap[name];
+            if (tool) {
+              try {
+                let parsedArgs =
+                  typeof args === "string" ? JSON.parse(args) : { ...args };
 
-                if (
-                  typeof val === "string" &&
-                  !isNaN(Number(val)) &&
-                  val.trim() !== ""
-                ) {
-                  parsedArgs[key] = Number(val);
+                for (const key in parsedArgs) {
+                  const value = parsedArgs[key];
+                  if (
+                    typeof value === "string" &&
+                    value.trim() !== "" &&
+                    !isNaN(Number(value))
+                  ) {
+                    parsedArgs[key] = Number(value);
+                  }
                 }
-              }
 
-              const tool = toolExecutorMap[name];
+                // Execution
+                console.log(`[Chat] Executing: ${name}`);
+                const toolOutput = await tool.execute(parsedArgs);
 
-              if (tool) {
-                try {
-                  console.log(
-                    `[Chat] Executing tool: ${name} with args:`,
-                    parsedArgs,
-                  );
-                  const toolOutput = await tool.execute(parsedArgs);
+                // Mark as executed so it's never called again in this session
+                executedTools.add(name);
 
-                  messages.push({
-                    role: "tool",
-                    tool_call_id: toolCall.id,
-                    name: name,
-                    content: JSON.stringify(toolOutput),
-                  });
-                } catch (e: any) {
-                  console.error(`[Chat] Tool execution error for ${name}:`, e);
-                  messages.push({
-                    role: "tool",
-                    tool_call_id: toolCall.id,
-                    name: name,
-                    content: JSON.stringify({
-                      error: "Tool execution failed",
-                      raw_detail: e.message,
-                    }),
-                  });
-                }
-              } else {
-                console.warn(`[Chat] Tool not found: ${name}`);
+                let cleanContent =
+                  toolOutput.result?.content?.[0]?.text ||
+                  (typeof toolOutput === "string"
+                    ? toolOutput
+                    : JSON.stringify(toolOutput));
+
                 messages.push({
                   role: "tool",
-                  tool_call_id: toolCall.id,
+                  tool_call_id: callId,
+                  name: name,
+                  content: cleanContent,
+                });
+              } catch (e: any) {
+                messages.push({
+                  role: "tool",
+                  tool_call_id: callId,
                   name: name,
                   content: JSON.stringify({
-                    error: "Tool not found",
-                    available_tools: Object.keys(toolExecutorMap),
+                    error: "Tool execution failed",
+                    details: e.message,
                   }),
                 });
               }
             }
-          } else {
-            isRunning = false;
           }
         }
 
@@ -463,9 +416,16 @@ export class MyAgent extends Agent<Env, never> {
           console.warn(`[Chat] Reached maximum loop count (${MAX_LOOPS})`);
         }
 
+        // Final content extraction: Get the last assistant message that actually has text
+        const finalContent = messages
+          .filter((m) => m.role === "assistant" && m.content)
+          .pop();
+
         return Response.json({
           status: "success",
-          answer: messages[messages.length - 1].content,
+          answer:
+            finalContent?.content ||
+            "I have processed your request. Is there anything else I can help with?",
         });
       } catch (error) {
         console.error("[Chat] Unexpected error:", error);
