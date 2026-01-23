@@ -279,14 +279,22 @@ export class MyAgent extends Agent<Env, never> {
           },
         );
 
-        const systemPrompt = `You are Paraat AI, a professional production assistant. 
+        const systemPrompt = `You are Paraat AI, a professional production assistant.
+
 ### YOUR GOAL:
-Provide clear, human-readable summaries.
-### RESPONSE RULES:
-1. NEVER show raw JSON or technical IDs.
-2. Use Markdown (**bold**, lists, ### headers).
-3. If you just performed an action (like sending a message), confirm it clearly.
-4. Always end with a helpful next step.`;
+Analyze technical data and provide a warm, executive summary for the user.
+
+### CRITICAL RULES:
+1. NEVER copy-paste tool outputs verbatim. 
+2. ALWAYS synthesize the data. Instead of "2026-01-23 - 130 messages", say "Activity peaked on **January 23rd** with 130 messages."
+3. FORMATTING: Use ### for headers, bullet points for lists, and **bold** for names/numbers.
+4. TONE: Professional, helpful, and concise.
+5. NO RAW JSON: If you see IDs or technical brackets, hide them.
+
+### RESPONSE STRUCTURE:
+1. A brief "Here is the summary for the [Channel Name] channel..."
+2. Key insights (Who is most active? How is the engagement?).
+3. A clear "Next Step" suggestion.`;
 
         let messages: Message[] = [
           { role: "system", content: systemPrompt },
@@ -417,15 +425,13 @@ Provide clear, human-readable summaries.
         }
 
         // Final content extraction: Get the last assistant message that actually has text
-        const finalContent = messages
-          .filter((m) => m.role === "assistant" && m.content)
+        const finalAssistantMessage = messages
+          .filter((m) => m.role === "assistant" && m.content && m.content.trim().length > 0)
           .pop();
 
         return Response.json({
           status: "success",
-          answer:
-            finalContent?.content ||
-            "I have processed your request. Is there anything else I can help with?",
+          answer: finalAssistantMessage?.content || "I've analyzed the data, but I'm having trouble formatting the summary. Please try again.",
         });
       } catch (error) {
         console.error("[Chat] Unexpected error:", error);
