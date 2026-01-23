@@ -40,29 +40,35 @@ export class MyAgent extends Agent<Env, never> {
       // Check if we already have a working connection
       const existingServers = await this.mcp.listServers();
       const workingServer = existingServers.find(
-        (s: any) => s.name === "SystemMCPportal" && s.state === "connected"
+        (s: any) => s.name === "SystemMCPportal" && s.state === "connected",
       );
-      
+
       if (workingServer) {
         console.log(`[Agent] Already connected to portal: ${workingServer.id}`);
-        
+
         // Verify tools are available
         try {
           const tools = await this.mcp.getAITools();
           const toolCount = Object.keys(tools).length;
-          console.log(`[Agent] Existing connection has ${toolCount} tools available`);
+          console.log(
+            `[Agent] Existing connection has ${toolCount} tools available`,
+          );
           return;
         } catch (e) {
-          console.warn(`[Agent] Existing connection has no tools, will reconnect`);
+          console.warn(
+            `[Agent] Existing connection has no tools, will reconnect`,
+          );
         }
       }
-      
-      // CRITICAL FIX: Clean up ANY non-connected server 
+
+      // CRITICAL FIX: Clean up ANY non-connected server
       // This includes: failed, error, authenticating, AND unknown states
       let cleanedCount = 0;
       for (const server of existingServers) {
         if (server.state !== "connected") {
-          console.log(`[Agent] Cleaning up ${server.state} connection: ${server.name} (${server.id})`);
+          console.log(
+            `[Agent] Cleaning up ${server.state} connection: ${server.name} (${server.id})`,
+          );
           try {
             await this.mcp.removeServer(server.id);
             cleanedCount++;
@@ -71,26 +77,25 @@ export class MyAgent extends Agent<Env, never> {
           }
         }
       }
-      
+
       if (cleanedCount > 0) {
         console.log(`[Agent] Cleaned up ${cleanedCount} stale connections`);
       }
 
       console.log(`[Agent] Connecting to MCP portal: ${portalUrl}`);
 
-      // The audience should match the portal URL (resource in OAuth)
       const result = await this.addMcpServer(
         "SystemMCPportal",
         portalUrl,
-        portalUrl, // ✅ Audience must match the portal URL for OAuth resource validation
+        "mcp-client-agent",
         undefined,
         {
           transport: {
             type: "streamable-http",
-             headers: {
-               "CF-Access-Client-Id": this.env.CFAccessClientId,
-               "CF-Access-Client-Secret": this.env.CFAccessClientSecret,
-             },
+            headers: {
+              "CF-Access-Client-Id": this.env.CFAccessClientId,
+              "CF-Access-Client-Secret": this.env.CFAccessClientSecret,
+            },
           },
         },
       );
@@ -125,7 +130,9 @@ export class MyAgent extends Agent<Env, never> {
         return;
       }
 
-      console.log(`[Agent] Connected! ID: ${result.id}, State: ${result.state}`);
+      console.log(
+        `[Agent] Connected! ID: ${result.id}, State: ${result.state}`,
+      );
       console.log(`[Agent] Success! Found tools: ${toolCount}`);
     } catch (err) {
       console.error("[Agent] Portal Connection Error:", err);
@@ -141,8 +148,10 @@ export class MyAgent extends Agent<Env, never> {
         const servers = await this.mcp.listServers();
 
         // Only count tools from connected servers
-        const connectedServers = servers.filter((s: any) => s.state === "connected");
-        
+        const connectedServers = servers.filter(
+          (s: any) => s.state === "connected",
+        );
+
         let toolCount = 0;
         if (connectedServers.length > 0) {
           try {
@@ -169,12 +178,12 @@ export class MyAgent extends Agent<Env, never> {
         return Response.json(status, { status: toolCount > 0 ? 200 : 503 });
       } catch (error) {
         return Response.json(
-          { 
-            status: "error", 
+          {
+            status: "error",
             error: error instanceof Error ? error.message : String(error),
             timestamp: new Date().toISOString(),
           },
-          { status: 500 }
+          { status: 500 },
         );
       }
     }
@@ -186,11 +195,11 @@ export class MyAgent extends Agent<Env, never> {
         return Response.json({ status: "success", tools });
       } catch (error) {
         return Response.json(
-          { 
-            status: "error", 
-            error: error instanceof Error ? error.message : String(error)
+          {
+            status: "error",
+            error: error instanceof Error ? error.message : String(error),
           },
-          { status: 500 }
+          { status: 500 },
         );
       }
     }
@@ -202,25 +211,31 @@ export class MyAgent extends Agent<Env, never> {
 
         // Check connection state before attempting to use tools
         const servers = await this.mcp.listServers();
-        const connectedServers = servers.filter((s: any) => s.state === "connected");
-        
+        console.log("Servers: ", servers);
+        const connectedServers = servers.filter(
+          (s: any) => s.name === "SystemMCPportal" && s.id,
+        );
+
         if (connectedServers.length === 0) {
           console.warn("[Chat] No connected MCP servers available");
-          
+
           // Try to reconnect
           await this.onStart();
-          
+
           // Check again
           const serversAfterReconnect = await this.mcp.listServers();
-          const reconnectedServers = serversAfterReconnect.filter((s: any) => s.state === "connected");
-          
+          const reconnectedServers = serversAfterReconnect.filter(
+            (s: any) => s.state === "connected",
+          );
+
           if (reconnectedServers.length === 0) {
             return Response.json(
               {
                 error: "No connected MCP servers available",
-                suggestion: "The MCP portal may be down or unreachable. Please try again later.",
+                suggestion:
+                  "The MCP portal may be down or unreachable. Please try again later.",
               },
-              { status: 503 }
+              { status: 503 },
             );
           }
         }
@@ -230,23 +245,28 @@ export class MyAgent extends Agent<Env, never> {
         const MAX_ATTEMPTS = 5;
         let mcpToolsResult: Record<string, any> = {};
 
-        while (Object.keys(mcpToolsResult).length === 0 && attempts < MAX_ATTEMPTS) {
+        while (
+          Object.keys(mcpToolsResult).length === 0 &&
+          attempts < MAX_ATTEMPTS
+        ) {
           try {
+            // Force a tool refresh
             mcpToolsResult = await this.mcp.getAITools();
-            
-            if (Object.keys(mcpToolsResult).length === 0 && attempts < MAX_ATTEMPTS - 1) {
+
+            if (Object.keys(mcpToolsResult).length > 0) {
               console.log(
-                `[Chat] Waiting for MCP tool discovery... attempt ${attempts + 1}/${MAX_ATTEMPTS}`,
+                `[Chat] Successfully discovered ${Object.keys(mcpToolsResult).length} tools.`,
               );
-              await new Promise((resolve) => setTimeout(resolve, 1000));
+              break;
             }
+
+            console.log(
+              `[Chat] Tools not found yet. Attempt ${attempts + 1}/${MAX_ATTEMPTS}`,
+            );
+            await new Promise((resolve) => setTimeout(resolve, 1500)); // Increase wait to 1.5s
           } catch (error) {
-            console.error(`[Chat] Error fetching tools (attempt ${attempts + 1}):`, error);
-            if (attempts < MAX_ATTEMPTS - 1) {
-              await new Promise((resolve) => setTimeout(resolve, 1000));
-            }
+            console.error(`[Chat] Tool fetch error:`, error);
           }
-          
           attempts++;
         }
 
@@ -255,9 +275,10 @@ export class MyAgent extends Agent<Env, never> {
             {
               error: "No MCP tools available after retry",
               attempts: attempts,
-              suggestion: "The MCP server may not have any tools configured or is still initializing.",
+              suggestion:
+                "The MCP server may not have any tools configured or is still initializing.",
             },
-            { status: 503 }
+            { status: 503 },
           );
         }
 
@@ -268,16 +289,14 @@ export class MyAgent extends Agent<Env, never> {
 
         const tools = Object.entries(mcpToolsResult).map(
           ([toolKey, tool]: [string, any]) => {
-            const realName = tool.name || toolKey.split("_").slice(2).join("_");
+            const displayName = tool.name || toolKey;
 
-            // Store the whole tool object (which has the .execute function)
-            toolExecutorMap[realName] = tool;
+            toolExecutorMap[displayName] = tool;
 
             return {
               type: "function",
-
               function: {
-                name: realName,
+                name: displayName,
                 description: tool.description,
                 parameters: tool.inputSchema.jsonSchema,
               },
@@ -357,7 +376,9 @@ export class MyAgent extends Agent<Env, never> {
             };
           } else if (result.messages && result.messages.length > 0) {
             // If the gateway returned a message history, take the last one
-            assistantMessage = { ...result.messages[result.messages.length - 1] };
+            assistantMessage = {
+              ...result.messages[result.messages.length - 1],
+            };
           } else {
             // Create a clean assistant message object
             assistantMessage = { role: "assistant", content: "" };
@@ -376,7 +397,8 @@ export class MyAgent extends Agent<Env, never> {
             for (const toolCall of result.result.tool_calls) {
               const { name, arguments: args } = toolCall;
 
-              let parsedArgs = typeof args === "string" ? JSON.parse(args) : args;
+              let parsedArgs =
+                typeof args === "string" ? JSON.parse(args) : args;
 
               // Convert numeric strings to numbers
               for (const key in parsedArgs) {
@@ -395,7 +417,10 @@ export class MyAgent extends Agent<Env, never> {
 
               if (tool) {
                 try {
-                  console.log(`[Chat] Executing tool: ${name} with args:`, parsedArgs);
+                  console.log(
+                    `[Chat] Executing tool: ${name} with args:`,
+                    parsedArgs,
+                  );
                   const toolOutput = await tool.execute(parsedArgs);
 
                   messages.push({
@@ -449,7 +474,7 @@ export class MyAgent extends Agent<Env, never> {
             error: "Internal server error",
             details: error instanceof Error ? error.message : String(error),
           },
-          { status: 500 }
+          { status: 500 },
         );
       }
     }
