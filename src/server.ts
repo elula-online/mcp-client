@@ -205,11 +205,12 @@ export class MyAgent extends Agent<Env, never> {
     }
 
     // Chat endpoint
+    // Chat endpoint
     if (request.method === "POST" && url.pathname.endsWith("/chat")) {
       try {
         const { prompt } = (await request.json()) as { prompt: string };
 
-        // Check connection state before attempting to use tools
+        // connection state before attempting to use tools
         const servers = await this.mcp.listServers();
         const connectedServers = servers.filter(
           (s: any) => s.name === "SystemMCPportal" && s.id,
@@ -235,7 +236,7 @@ export class MyAgent extends Agent<Env, never> {
           }
         }
 
-        // Fetch tools with retry logic
+        //fetch tools with retry logic
         let attempts = 0;
         const MAX_ATTEMPTS = 5;
         let mcpToolsResult: Record<string, any> = {};
@@ -279,22 +280,91 @@ export class MyAgent extends Agent<Env, never> {
           },
         );
 
-        const systemPrompt = `You are Paraat AI, a professional production assistant.
+        const systemPrompt = `You are a professional production assistant.
 
-### YOUR GOAL:
-Analyze technical data and provide a warm, executive summary for the user.
+Your job is to reason like an engineer but respond like a polished product UI.
 
-### CRITICAL RULES:
-1. NEVER copy-paste tool outputs verbatim. 
-2. ALWAYS synthesize the data. Instead of "2026-01-23 - 130 messages", say "Activity peaked on **January 23rd** with 130 messages."
-3. FORMATTING: Use ### for headers, bullet points for lists, and **bold** for names/numbers.
-4. TONE: Professional, helpful, and concise.
-5. NO RAW JSON: If you see IDs or technical brackets, hide them.
+---
 
-### RESPONSE STRUCTURE:
-1. A brief "Here is the summary for the [Channel Name] channel..."
-2. Key insights (Who is most active? How is the engagement?).
-3. A clear "Next Step" suggestion.`;
+## YOUR STRATEGY
+1. DISCOVERY 
+If a user asks for something by name (e.g. "stats on the dev channel") and you don't have an ID, use a discovery tool first (list/search).
+
+2. SEQUENTIAL STEPS 
+You may call multiple tools in sequence when needed.
+Example: List Channels → Find "Dev" → Get stats for that channel.
+
+3. AMBIGUITY HANDLING 
+If multiple results match (e.g. two "Dev" channels), stop and ask the user to clarify before continuing.
+
+4. TOOL-THEN-NARRATE 
+Tool outputs are NEVER the final response.
+Always analyze the tool result and convert it into a clear, human-readable explanation.
+
+---
+
+## RESPONSE & FORMATTING RULES
+1. Use Markdown formatting suitable for web apps:
+ - ### Headings for sections
+ - Bullet lists instead of long paragraphs
+ - **Bold** for key outcomes or confirmations
+ - Short, readable paragraphs
+
+2. Explain results clearly:
+ - What was done
+ - What the outcome is
+ - Any important implications or limits
+
+3. NEVER expose:
+ - Raw JSON
+ - Internal IDs
+ - Tool arguments
+ - System or technical metadata
+
+4. Always end with a helpful next step or suggestion.
+
+---
+
+## ACTION-AWARE RESPONSES (CRITICAL)
+If a tool performs an action (post, send, update, delete, trigger, create):
+
+- Respond in a **user-facing, confirmation tone**
+- Use past tense and ownership
+- Frame the response from the user's perspective
+
+Examples:
+- "I've posted your message to the Dev channel."
+- "Your announcement has been successfully sent."
+- "The channel description has been updated."
+
+Do NOT say:
+- "The tool returned success"
+- "API response indicates"
+- "Status code 200"
+
+---
+
+## HANDLING MISSING INFORMATION
+- If a required value (e.g. channel_id) is missing, use a discovery tool first.
+- If the information still cannot be found:
+  Ask the user clearly and politely.
+
+Example:
+"I couldn't find a channel named **Dev**. Could you double-check the name or tell me which one you mean?"
+
+---
+
+## CRITICAL EXECUTION RULES
+1. **ALWAYS provide a text response after using tools** - Analyze tool outputs and summarize them for the user
+2. **NEVER leave your response empty** - If you call a tool, you MUST explain what happened
+3. **If a tool was already executed**, use the previous result to provide your answer
+4. **Stop calling tools once you have the information** you need to answer the user
+
+---
+
+## DATA FLOW RULE
+Reason internally, respond externally.
+Only the final, polished explanation is shown to the user.`;
 
         let messages: Message[] = [
           { role: "system", content: systemPrompt },
@@ -303,12 +373,17 @@ Analyze technical data and provide a warm, executive summary for the user.
 
         let isRunning = true;
         let loopCount = 0;
-        const MAX_LOOPS = 5;
-        // Safeguard: Track tools to prevent duplicate executions (like double-posting)
-        const executedTools = new Set<string>();
+        const MAX_LOOPS = 3;
+
+        // track tool executions by creating a unique signature: toolName + arguments
+        const executedToolSignatures = new Set<string>();
+        let hasExecutedAnyTool = false;
 
         while (isRunning && loopCount < MAX_LOOPS) {
           loopCount++;
+
+          // after executing tools, disable them to force text response
+          const shouldAllowTools = !hasExecutedAnyTool;
 
           const response = await gateway.run({
             provider: "workers-ai",
@@ -319,8 +394,8 @@ Analyze technical data and provide a warm, executive summary for the user.
             },
             query: {
               messages: messages,
-              tools: tools,
-              tool_choice: "auto",
+              tools: shouldAllowTools ? tools : [],
+              tool_choice: shouldAllowTools ? "auto" : "none",
             },
           });
 
@@ -333,40 +408,52 @@ Analyze technical data and provide a warm, executive summary for the user.
           }
 
           const toolCalls = result.result.tool_calls || [];
+          const assistantContent = result.result.response || "";
 
-          // Prepare Assistant Message
-          let assistantMessage: Message = {
-            role: "assistant",
-            content: result.result.response || "",
-          };
-          if (toolCalls.length > 0) assistantMessage.tool_calls = toolCalls;
-
-          messages.push(assistantMessage);
-
-          // If no tool calls, the LLM is providing a final text answer
-          if (toolCalls.length === 0) {
-            isRunning = false;
-            break;
+          // if we have text content, we're done
+          if (!shouldAllowTools || toolCalls.length === 0) {
+            if (assistantContent && assistantContent.trim().length > 0) {
+              messages.push({
+                role: "assistant",
+                content: assistantContent,
+              });
+              isRunning = false;
+              break;
+            } else if (!shouldAllowTools) {
+              // we disabled tools but LLM still didnot respond - force it
+              console.warn("[Chat] LLM failed to respond after tool execution");
+              messages.push({
+                role: "user",
+                content:
+                  "Based on the tool results above, please provide a clear, user-friendly summary of what was accomplished. Write as if you're confirming the action to the user.",
+              });
+              continue;
+            }
           }
 
-          // Process each tool call
+          // assistant Message with tool calls
+          let assistantMessage: Message = {
+            role: "assistant",
+            content: assistantContent,
+          };
+          if (toolCalls.length > 0) assistantMessage.tool_calls = toolCalls;
+          messages.push(assistantMessage);
+
+          // process tool calls
+          let toolsExecutedThisRound = 0;
+
           for (const toolCall of toolCalls) {
             const { name, arguments: args, id: callId } = toolCall;
 
+            // create a unique signature for this specific tool call
+            const argsString =
+              typeof args === "string" ? args : JSON.stringify(args);
+            const toolSignature = `${name}::${argsString}`;
+
             // PREVENT DUPLICATE TOOL EXECUTION
-            if (executedTools.has(name)) {
-              console.warn(`[Chat] Blocking duplicate execution of: ${name}`);
-              messages.push({
-                role: "tool",
-                tool_call_id: callId,
-                name: name,
-                content: JSON.stringify({
-                  error: "Action already performed.",
-                  instruction:
-                    "You have already called this tool. Do not call it again. Please summarize the outcome for the user based on previous data.",
-                }),
-              });
-              continue; // Skip actual execution
+            if (executedToolSignatures.has(toolSignature)) {
+              console.warn(`[Chat] Blocking duplicate: ${name}`);
+              continue;
             }
 
             const tool = toolExecutorMap[name];
@@ -375,6 +462,7 @@ Analyze technical data and provide a warm, executive summary for the user.
                 let parsedArgs =
                   typeof args === "string" ? JSON.parse(args) : { ...args };
 
+                // convert string numbers to actual numbers
                 for (const key in parsedArgs) {
                   const value = parsedArgs[key];
                   if (
@@ -386,18 +474,35 @@ Analyze technical data and provide a warm, executive summary for the user.
                   }
                 }
 
-                // Execution
-                console.log(`[Chat] Executing: ${name}`);
+                // execution
+                console.log(`[Chat] Executing: ${name} with args:`, parsedArgs);
                 const toolOutput = await tool.execute(parsedArgs);
 
-                // Mark as executed so it's never called again in this session
-                executedTools.add(name);
+                // mark this specific tool call as executed
+                executedToolSignatures.add(toolSignature);
+                hasExecutedAnyTool = true;
+                toolsExecutedThisRound++;
 
-                let cleanContent =
-                  toolOutput.result?.content?.[0]?.text ||
-                  (typeof toolOutput === "string"
-                    ? toolOutput
-                    : JSON.stringify(toolOutput));
+                // clean and parse the tool output
+                let cleanContent;
+
+                if (toolOutput.result?.content?.[0]?.text) {
+                  cleanContent = toolOutput.result.content[0].text;
+                } else if (typeof toolOutput === "string") {
+                  cleanContent = toolOutput;
+                } else {
+                  cleanContent = JSON.stringify(toolOutput);
+                }
+
+                // try to parse nested JSON if present
+                try {
+                  const parsed = JSON.parse(cleanContent);
+                  if (parsed.content?.[0]?.text) {
+                    cleanContent = parsed.content[0].text;
+                  }
+                } catch {
+                  // not nested JSON, use as-is
+                }
 
                 messages.push({
                   role: "tool",
@@ -406,6 +511,7 @@ Analyze technical data and provide a warm, executive summary for the user.
                   content: cleanContent,
                 });
               } catch (e: any) {
+                console.error(`[Chat] Tool execution error:`, e);
                 messages.push({
                   role: "tool",
                   tool_call_id: callId,
@@ -415,8 +521,28 @@ Analyze technical data and provide a warm, executive summary for the user.
                     details: e.message,
                   }),
                 });
+                hasExecutedAnyTool = true;
               }
+            } else {
+              messages.push({
+                role: "tool",
+                tool_call_id: callId,
+                name: name,
+                content: JSON.stringify({
+                  error: "Tool not found",
+                  details: `Tool ${name} is not available`,
+                }),
+              });
             }
+          }
+
+          // after executing tools, add a prompt to encourage response
+          if (toolsExecutedThisRound > 0) {
+            messages.push({
+              role: "user",
+              content:
+                "Now provide a user-friendly summary of what was done. Be specific about the action that was completed.",
+            });
           }
         }
 
@@ -424,14 +550,88 @@ Analyze technical data and provide a warm, executive summary for the user.
           console.warn(`[Chat] Reached maximum loop count (${MAX_LOOPS})`);
         }
 
-        // Final content extraction: Get the last assistant message that actually has text
+        // final content extraction: get the last assistant message that actually has text
         const finalAssistantMessage = messages
-          .filter((m) => m.role === "assistant" && m.content && m.content.trim().length > 0)
+          .filter(
+            (m) =>
+              m.role === "assistant" &&
+              m.content &&
+              m.content.trim().length > 0,
+          )
           .pop();
+
+        let finalAnswer = finalAssistantMessage?.content || "";
+
+        // if we still donot have a good answer, generate one from the tool results
+        if (
+          !finalAnswer ||
+          finalAnswer.trim().length === 0 ||
+          finalAnswer.startsWith("{")
+        ) {
+          console.warn(
+            "[Chat] No valid text response, generating from tool results",
+          );
+
+          // find the last successful tool execution
+          const toolMessages = messages.filter((m) => m.role === "tool");
+          const lastToolMessage = toolMessages[toolMessages.length - 1];
+
+          if (lastToolMessage) {
+            try {
+              const toolResult = JSON.parse(lastToolMessage.content);
+
+              // generate a user-friendly response based on tool result
+              if (toolResult.success) {
+                const toolName = lastToolMessage.name || "action";
+
+                // extract action type from tool name
+                if (
+                  toolName.includes("post_message") ||
+                  toolName.includes("send")
+                ) {
+                  finalAnswer = `**Message sent successfully!**\n\nYour message has been posted to the channel.`;
+                } else if (toolName.includes("create")) {
+                  finalAnswer = `**Created successfully!**\n\nThe item has been created.`;
+                } else if (toolName.includes("update")) {
+                  finalAnswer = `**Updated successfully!**\n\nThe changes have been saved.`;
+                } else if (toolName.includes("delete")) {
+                  finalAnswer = `**Deleted successfully!**\n\nThe item has been removed.`;
+                } else if (
+                  toolName.includes("list") ||
+                  toolName.includes("get")
+                ) {
+                  finalAnswer = `**Retrieved successfully!**\n\nI've fetched the requested information.`;
+                } else {
+                  finalAnswer = `**Action completed successfully!**\n\nThe requested operation has been performed.`;
+                }
+              } else if (toolResult.error) {
+                finalAnswer = `**Action encountered an issue**\n\n${toolResult.error}\n\n${toolResult.details || "Please try again or contact support."}`;
+              }
+            } catch {
+              // tool result wasnot JSON, try to use it directly
+              if (lastToolMessage.content.includes("success")) {
+                finalAnswer = `**Action completed!**\n\nYour request has been processed successfully.`;
+              } else {
+                finalAnswer = `**Action completed**\n\n${lastToolMessage.content.substring(0, 200)}`;
+              }
+            }
+          } else {
+            finalAnswer =
+              "I've processed your request, but I'm having trouble generating a detailed summary. Please try asking again with more specifics.";
+          }
+        }
+
+        // clean up any JSON artifacts from the response
+        if (finalAnswer.startsWith("{") && finalAnswer.includes('"name":')) {
+          console.warn(
+            "[Chat] Detected tool call in response, replacing with fallback",
+          );
+          finalAnswer = `**Request processed!**\n\nI've completed the action you requested.`;
+        }
 
         return Response.json({
           status: "success",
-          answer: finalAssistantMessage?.content || "I've analyzed the data, but I'm having trouble formatting the summary. Please try again.",
+          answer: finalAnswer,
         });
       } catch (error) {
         console.error("[Chat] Unexpected error:", error);
