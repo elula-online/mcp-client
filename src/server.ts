@@ -442,7 +442,7 @@ You should:
 
       const response = await gateway.run({
         provider: "workers-ai",
-        endpoint: "@cf/meta/llama-3.1-70b-instruct",
+        endpoint: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
         headers: {
           "Content-Type": "application/json",
           authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN || "LOCAL_AUTH_FALLBACK"}`,
@@ -719,7 +719,7 @@ DO NOT provide a wall of text. Structure your response clearly.`,
       // One final attempt to get a response
       const finalResponse = await gateway.run({
         provider: "workers-ai",
-        endpoint: "@cf/meta/llama-3.1-70b-instruct",
+        endpoint: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
         headers: {
           "Content-Type": "application/json",
           authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN || "LOCAL_AUTH_FALLBACK"}`,
