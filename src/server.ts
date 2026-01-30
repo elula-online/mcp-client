@@ -604,12 +604,11 @@ NEXT STEP: Call mattermost_search_messages or mattermost_search_threads to find 
               });
               messages.push({
                 role: "user",
-                content: `CRITICAL: Your response contains technical implementation details that users should not see. 
+                content: `CRITICAL: Your response contains technical implementation details that users should not see. Please use line breaks \\n\ and other formatters.
 
 Rewrite your response following these rules:
 1. NEVER mention tool names, function names, or technical processes
 2. Present only the final result or information in a natural, friendly way
-3. Use clear formatting with headings and bullet points
 4. If something failed, just say what the issue is simply without explaining your troubleshooting process
 
 Rewrite your response now.`,
@@ -632,7 +631,7 @@ Rewrite your response now.`,
             );
             messages.push({
               role: "user",
-              content: `Provide your answer to the user now based on the information you've gathered. Use clean Markdown formatting and do not mention any technical details.`,
+              content: `Provide your answer to the user now based on the information you've gathered. Do not mention any technical details. Please use line breaks \\n\ and other formatters.`,
             });
             continue;
           }
@@ -695,12 +694,11 @@ Rewrite your response now.`,
                   role: "user",
                   content: `CRITICAL: You are trying to repeat an action that was already completed.
 
-You MUST stop calling tools and provide a user-friendly response NOW.
+You MUST stop calling tools and provide a user-friendly response NOW. Please use line breaks \\n\ and other formatters
 
 Requirements:
 - Confirm what was done
-- Use natural language (no technical terms)
-- Format with **bold** for emphasis
+- no technical terms
 - Be brief and friendly
 
 Example: "✓ Message sent to **#town-square** successfully!"
@@ -805,7 +803,7 @@ Respond to the user immediately.`,
                       role: "user",
                       content: `Perfect! The action completed successfully. Now provide a brief, friendly confirmation to the user.
 
-Format your response like this:
+your response should sound like this:
 ✓ Done! [Brief description of what was accomplished]
 
 DO NOT call any more tools. Just confirm the action was completed.`,
@@ -913,9 +911,8 @@ DO NOT call any more tools. Just confirm the action was completed.`,
 
 Requirements for your response:
 1. Present ONLY the information the user asked for
-2. Use clean Markdown formatting (## headings, **bold**, bullet points)
 3. DO NOT mention any tool names or technical processes
-4. DO NOT say "I already provided this" - just provide it again in a clean format
+4. DO NOT say "I already provided this" - just provide it again
 5. If listing many items, organize them into logical groups with subheadings
 
 Provide your final answer now.`,
@@ -933,8 +930,7 @@ Provide your final answer now.`,
 
 Requirements:
 1. Use only the information you've gathered from successful tool calls
-2. Format cleanly with Markdown (## headings, **bold**, bullet points)
-3. Organize information logically (group related items, use subheadings)
+3. Organize information logically
 4. DO NOT mention tools, functions, or technical processes
 5. DO NOT apologize excessively - just provide the best answer you can
 
