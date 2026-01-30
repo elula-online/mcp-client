@@ -695,7 +695,16 @@ If the search results show a channel/user/post exists, use its ID to complete th
         console.warn("[Agent] LLM provided neither tool calls nor text response");
         messages.push({
           role: "user",
-          content: "Please provide a response based on the information available or explain what additional information you need.",
+          content: `Please provide a response based on the information available or explain what additional information you need.
+
+CRITICAL: Format your response properly with:
+- ## Headings for main sections
+- ### Subheadings for subsections  
+- **Bold** for important names and terms
+- * Bullet points for lists
+- Blank lines between sections
+
+DO NOT provide a wall of text. Structure your response clearly.`,
         });
       }
     }
