@@ -309,13 +309,77 @@ if (request.method === "POST" && url.pathname.endsWith("/chat")) {
 
     let isRunning = true;
     let loopCount = 0;
-    const MAX_LOOPS = 10; // Increased to allow for sequential tool calls
+    const MAX_LOOPS = 10;
 
     // Track tool executions with detailed metadata
     const toolExecutionHistory = new Map<string, ToolExecution>();
-    const successfulToolCalls = new Set<string>(); // Track successful calls to prevent re-execution
+    const successfulToolCalls = new Set<string>();
+    
+    // Track discovered IDs to prevent redundant searches
+    const discoveredIds = new Map<string, string>();
 
-     //analyze tool error to determine recovery strategy
+    // Validate and sanitize tool arguments before execution
+    function sanitizeToolArgs(toolName: string, args: any): any {
+      const sanitized = { ...args };
+      
+      // Convert string numbers to actual numbers for numeric parameters
+      const numericParams = ['limit', 'page', 'message_limit', 'max_channels'];
+      for (const param of numericParams) {
+        if (sanitized[param] !== undefined) {
+          const value = sanitized[param];
+          if (typeof value === 'string' && value.trim() !== '' && !isNaN(Number(value))) {
+            sanitized[param] = Number(value);
+          } else if (typeof value === 'number') {
+            // Keep as is
+          } else {
+            // Invalid value - remove it to use default
+            delete sanitized[param];
+          }
+        }
+      }
+      
+      // Validate time_range for summarize_channel
+      if (toolName.includes('summarize_channel') && sanitized.time_range !== undefined) {
+        const validTimeRanges = ['today', 'yesterday', 'this_week', 'this_month', 'all'];
+        const isValidFormat = validTimeRanges.includes(sanitized.time_range) || 
+                             /^\d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2}$/.test(sanitized.time_range) ||
+                             /^\d{2}\/\d{2}\/\d{4} to \d{2}\/\d{2}\/\d{4}$/.test(sanitized.time_range);
+        
+        if (!isValidFormat && typeof sanitized.time_range !== 'string') {
+          sanitized.time_range = 'all';
+        }
+      }
+      
+      // Remove 'none' username values that cause errors
+      if (sanitized.username === 'none' || sanitized.username === 'None') {
+        delete sanitized.username;
+      }
+      
+      return sanitized;
+    }
+
+    // Extract and store discovered IDs from search results
+    function extractDiscoveredIds(toolName: string, result: string) {
+      if (toolName.includes('search_channels')) {
+        try {
+          const parsed = JSON.parse(result);
+          if (parsed.channels && Array.isArray(parsed.channels)) {
+            for (const channel of parsed.channels) {
+              if (channel.name && channel.id) {
+                discoveredIds.set(channel.name.toLowerCase(), channel.id);
+                if (channel.display_name) {
+                  discoveredIds.set(channel.display_name.toLowerCase(), channel.id);
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // Ignore parsing errors
+        }
+      }
+    }
+
+    // analyze tool error to determine recovery strategy
     function analyzeToolError(
       toolName: string,
       errorContent: string,
@@ -324,6 +388,7 @@ if (request.method === "POST" && url.pathname.endsWith("/chat")) {
       errorType: "not_found" | "invalid_params" | "missing_id" | "other";
       suggestedRecovery?: string;
       missingParam?: string;
+      isRecoverable: boolean;
     } {
       const errorLower = errorContent.toLowerCase();
 
@@ -343,6 +408,7 @@ if (request.method === "POST" && url.pathname.endsWith("/chat")) {
             errorType: "not_found",
             suggestedRecovery: "mattermost_search_channels",
             missingParam: "channel_id",
+            isRecoverable: true,
           };
         }
         if (errorLower.includes("user") && !toolArgs.user_id) {
@@ -350,6 +416,7 @@ if (request.method === "POST" && url.pathname.endsWith("/chat")) {
             errorType: "not_found",
             suggestedRecovery: "mattermost_get_users",
             missingParam: "user_id",
+            isRecoverable: true,
           };
         }
         if (errorLower.includes("post") || errorLower.includes("thread")) {
@@ -357,88 +424,97 @@ if (request.method === "POST" && url.pathname.endsWith("/chat")) {
             errorType: "not_found",
             suggestedRecovery: "mattermost_search_messages",
             missingParam: "post_id",
+            isRecoverable: true,
           };
         }
-        return { errorType: "not_found" };
+        return { errorType: "not_found", isRecoverable: false };
       }
 
       // Check for invalid parameter errors
       if (
         errorLower.includes("invalid") ||
         errorLower.includes("bad request") ||
-        errorLower.includes("400")
+        errorLower.includes("400") ||
+        errorLower.includes("validation error")
       ) {
-        return { errorType: "invalid_params" };
+        return { errorType: "invalid_params", isRecoverable: false };
       }
 
-      return { errorType: "other" };
+      return { errorType: "other", isRecoverable: false };
     }
 
-    //create smart guidance prompt for LLM after tool error
+    // create smart guidance prompt for LLM after tool error
     function createErrorRecoveryPrompt(
       toolName: string,
       errorAnalysis: ReturnType<typeof analyzeToolError>,
       originalArgs: any,
-      hasSearchedAlready: boolean = false
-    ): string {
-      if (errorAnalysis.suggestedRecovery) {
-        const examples: Record<string, string> = {
-          mattermost_search_channels: hasSearchedAlready 
-            ? `You already searched for channels. Now you MUST:
-1. Look at the PREVIOUS mattermost_search_channels result in this conversation
-2. Find the channel with name matching "${originalArgs.channel}"
-3. Extract the "id" field from that channel object
-4. Call ${toolName} using the extracted channel ID (use parameter "channel" with the ID value)
-
-CRITICAL: Do NOT search again. Use the ID from the previous search result.`
-            : `The channel was not found using the name "${originalArgs.channel}". 
-          
-You should:
-1. Call mattermost_search_channels with search_term: "${originalArgs.channel}"
-2. Look through the results to find the matching channel
-3. Extract the "id" field from the matching channel
-4. Retry ${toolName} with channel: "<extracted_id>"`,
-
-          mattermost_get_users: hasSearchedAlready
-            ? `You already searched for users. Now you MUST:
-1. Look at the PREVIOUS mattermost_get_users result
-2. Find the user matching "${originalArgs.username || originalArgs.user_id}"
-3. Extract the "id" field from that user object
-4. Call ${toolName} using the extracted user_id
-
-CRITICAL: Do NOT search again. Use the ID from the previous search result.`
-            : `The user was not found using "${originalArgs.username || originalArgs.user_id}".
-
-You should:
-1. Call mattermost_get_users to get all users
-2. Search for a user matching "${originalArgs.username || originalArgs.user_id}"
-3. Extract the user_id from the result
-4. Retry ${toolName} with the correct user_id`,
-
-          mattermost_search_messages: `The post/thread was not found.
-
-You should:
-1. Call mattermost_search_messages or mattermost_search_threads to find the conversation
-2. Extract the post_id from the results
-3. Retry ${toolName} with the correct post_id`,
-        };
-
-        return examples[errorAnalysis.suggestedRecovery] || "An error occurred. Please analyze the error and determine the next step.";
+      discoveredIdsContext: Map<string, string>
+    ): string | null {
+      if (!errorAnalysis.isRecoverable) {
+        return null;
       }
 
-      return `The tool ${toolName} failed. Analyze the error and determine if you need to call another tool first to get the required information, or if you should inform the user about the issue.`;
+      // Check if we already have the ID from previous searches
+      const channelName = originalArgs.channel?.toLowerCase().replace(/\s+/g, '-');
+      if (channelName && discoveredIdsContext.has(channelName)) {
+        const channelId = discoveredIdsContext.get(channelName);
+        return `CRITICAL INSTRUCTION: The channel ID for "${originalArgs.channel}" is already known: ${channelId}
+
+You MUST now call ${toolName} again with these EXACT parameters:
+- channel: "${channelId}"
+- Keep all other parameters the same
+
+DO NOT search again. USE THE ID ABOVE.`;
+      }
+
+      // Also check with original name (without replacement)
+      const originalChannelName = originalArgs.channel?.toLowerCase();
+      if (originalChannelName && discoveredIdsContext.has(originalChannelName)) {
+        const channelId = discoveredIdsContext.get(originalChannelName);
+        return `CRITICAL INSTRUCTION: The channel ID for "${originalArgs.channel}" is already known: ${channelId}
+
+You MUST now call ${toolName} again with these EXACT parameters:
+- channel: "${channelId}"
+- Keep all other parameters the same
+
+DO NOT search again. USE THE ID ABOVE.`;
+      }
+
+      // If ID not discovered yet, provide ONE-TIME search instruction
+      if (errorAnalysis.suggestedRecovery === "mattermost_search_channels") {
+        return `The channel "${originalArgs.channel}" was not found. 
+
+NEXT STEP: Call mattermost_search_channels ONCE with search_term: "${originalArgs.channel}"
+
+After you get the result, extract the channel ID and call ${toolName} again with that ID.`;
+      }
+
+      if (errorAnalysis.suggestedRecovery === "mattermost_get_users") {
+        return `The user was not found.
+
+NEXT STEP: Call mattermost_get_users to get all users, find the matching user, extract the user_id, and retry ${toolName} with the correct user_id.`;
+      }
+
+      if (errorAnalysis.suggestedRecovery === "mattermost_search_messages") {
+        return `The post/thread was not found.
+
+NEXT STEP: Call mattermost_search_messages or mattermost_search_threads to find the conversation, extract the post_id, and retry ${toolName} with the correct post_id.`;
+      }
+
+      return null;
     }
 
     // main agent loop
     let consecutiveFailedAttempts = 0;
     let lastFailedToolName = "";
+    let searchLoopCount = 0;
     
     while (isRunning && loopCount < MAX_LOOPS) {
       loopCount++;
       console.log(`[Agent] Loop ${loopCount}/${MAX_LOOPS}`);
 
-      // allow tools until we get a final answer
-      const shouldAllowTools = true;
+      // Force final answer if we've done too many search loops
+      const shouldForceAnswer = searchLoopCount >= 2 || loopCount >= MAX_LOOPS - 1;
 
       const response = await gateway.run({
         provider: "workers-ai",
@@ -449,8 +525,8 @@ You should:
         },
         query: {
           messages: messages,
-          tools: shouldAllowTools ? tools : [],
-          tool_choice: shouldAllowTools ? "auto" : "none",
+          tools: shouldForceAnswer ? [] : tools,
+          tool_choice: shouldForceAnswer ? "none" : "auto",
           max_tokens: 1000,
         },
       });
@@ -466,14 +542,55 @@ You should:
       const toolCalls = result.result.tool_calls || [];
       const assistantContent = result.result.response || "";
 
-      // if LLM provides a text response with no tool calls, we're done
+      // if LLM provides a text response with no tool calls, check for technical jargon
       if (toolCalls.length === 0 && assistantContent && assistantContent.trim().length > 0) {
+        // Detect if response contains technical jargon that should not be shown to users
+        const hasTechnicalJargon = 
+          /tool_[a-zA-Z0-9_]+_mattermost/i.test(assistantContent) ||
+          /\bfunction\b/i.test(assistantContent) ||
+          /\bparameter/i.test(assistantContent) ||
+          /channel_id.*[a-z0-9]{26}/i.test(assistantContent) ||
+          /I was unable to.*using the.*function/i.test(assistantContent) ||
+          /I have already provided.*in my previous response/i.test(assistantContent);
+        
+        if (hasTechnicalJargon && loopCount < MAX_LOOPS - 1) {
+          // Force LLM to rewrite without technical details
+          console.warn("[Agent] Technical jargon detected in response. Requesting rewrite.");
+          messages.push({
+            role: "assistant",
+            content: assistantContent,
+          });
+          messages.push({
+            role: "user",
+            content: `CRITICAL: Your response contains technical implementation details that users should not see. 
+
+Rewrite your response following these rules:
+1. NEVER mention tool names, function names, or technical processes
+2. Present only the final result or information in a natural, friendly way
+3. Use clear formatting with headings and bullet points
+4. If something failed, just say what the issue is simply without explaining your troubleshooting process
+
+Rewrite your response now.`,
+          });
+          continue;
+        }
+        
         messages.push({
           role: "assistant",
           content: assistantContent,
         });
         isRunning = false;
         break;
+      }
+
+      // If no tool calls and no content, prompt for response
+      if (toolCalls.length === 0 && !assistantContent) {
+        console.warn("[Agent] LLM provided neither tool calls nor text response");
+        messages.push({
+          role: "user",
+          content: `Provide your answer to the user now based on the information you've gathered. Use clean Markdown formatting and do not mention any technical details.`,
+        });
+        continue;
       }
 
       // If LLM wants to call tools, process them
@@ -494,12 +611,22 @@ You should:
           tc.name.includes('get_channels')
         );
 
+        if (onlySearchToolsCalled) {
+          searchLoopCount++;
+        } else {
+          searchLoopCount = 0;
+        }
+
         // Process each tool call
         for (const toolCall of toolCalls) {
           const { name, arguments: args, id: callId } = toolCall;
 
+          // Parse and sanitize arguments
+          let parsedArgs = typeof args === "string" ? JSON.parse(args) : { ...args };
+          parsedArgs = sanitizeToolArgs(name, parsedArgs);
+
           // Create unique signature for this tool call
-          const argsString = typeof args === "string" ? args : JSON.stringify(args);
+          const argsString = JSON.stringify(parsedArgs);
           const toolSignature = `${name}::${argsString}`;
 
           // CONSTRAINT 1: Prevent calling a tool that already succeeded
@@ -532,20 +659,6 @@ You should:
           }
 
           try {
-            let parsedArgs = typeof args === "string" ? JSON.parse(args) : { ...args };
-
-            // Convert string numbers to actual numbers
-            for (const key in parsedArgs) {
-              const value = parsedArgs[key];
-              if (
-                typeof value === "string" &&
-                value.trim() !== "" &&
-                !isNaN(Number(value))
-              ) {
-                parsedArgs[key] = Number(value);
-              }
-            }
-
             // Execute the tool
             console.log(`[Agent] Executing: ${name} with args:`, parsedArgs);
             const toolOutput = await tool.execute(parsedArgs);
@@ -584,6 +697,9 @@ You should:
                 result: cleanContent,
                 success: true,
               });
+
+              // Extract IDs from search results
+              extractDiscoveredIds(name, cleanContent);
 
               messages.push({
                 role: "tool",
@@ -624,34 +740,36 @@ You should:
                 lastFailedToolName = name;
               }
 
-              // If we've failed 3 times on the same tool, force the agent to respond
-              if (consecutiveFailedAttempts >= 3) {
+              // If we've failed 2 times on the same tool, force the agent to respond
+              if (consecutiveFailedAttempts >= 2) {
                 console.warn(`[Agent] Tool ${name} failed ${consecutiveFailedAttempts} times. Forcing final response.`);
                 messages.push({
                   role: "user",
                   content: `You have attempted to use ${name} multiple times without success. Based on all the information you've gathered so far, please provide a helpful response to the user explaining what you found (if anything) or what the issue might be. Do not attempt to use ${name} again.`,
                 });
-                consecutiveFailedAttempts = 0; // Reset to prevent repeated triggers
+                consecutiveFailedAttempts = 0;
               } else {
-                // Check if we've already called the recovery tool successfully
-                const hasCalledRecoveryTool = errorAnalysis.suggestedRecovery 
-                  ? Array.from(successfulToolCalls).some(sig => sig.startsWith(errorAnalysis.suggestedRecovery + "::"))
-                  : false;
-
-                // Add intelligent recovery guidance
+                // Provide recovery guidance
                 const recoveryPrompt = createErrorRecoveryPrompt(
                   name, 
                   errorAnalysis, 
                   parsedArgs,
-                  hasCalledRecoveryTool
+                  discoveredIds
                 );
                 
-                messages.push({
-                  role: "user",
-                  content: recoveryPrompt,
-                });
-
-                console.log(`[Agent] ✗ Tool ${name} failed with ${errorAnalysis.errorType}. ${hasCalledRecoveryTool ? 'Recovery tool already called - instructing to use results' : 'Suggesting recovery'}.`);
+                if (recoveryPrompt) {
+                  messages.push({
+                    role: "user",
+                    content: recoveryPrompt,
+                  });
+                  console.log(`[Agent] ✗ Tool ${name} failed with ${errorAnalysis.errorType}. Providing recovery guidance.`);
+                } else {
+                  messages.push({
+                    role: "user",
+                    content: `The tool encountered an error. Please analyze the error and provide the best response you can based on the information available.`,
+                  });
+                  console.log(`[Agent] ✗ Tool ${name} failed with non-recoverable error.`);
+                }
               }
             }
 
@@ -667,7 +785,6 @@ You should:
               }),
             });
 
-            // Provide recovery guidance for exceptions too
             messages.push({
               role: "user",
               content: `The tool ${name} threw an exception: ${e.message}. Please analyze if you need different parameters or a different tool to accomplish the task.`,
@@ -675,37 +792,24 @@ You should:
           }
         }
         
-        // If we're at loop 5+ and only search tools were called, intervene
-        if (loopCount >= 5 && onlySearchToolsCalled && successfulToolCalls.size > 0) {
-          console.warn(`[Agent] Loop ${loopCount}: Only search tools called. Forcing LLM to use results.`);
+        // If we've done 2+ consecutive search loops with successful results, force action
+        if (searchLoopCount >= 2 && successfulToolCalls.size > 0) {
+          console.warn(`[Agent] ${searchLoopCount} consecutive search loops detected. Forcing action or final answer.`);
           messages.push({
             role: "user",
-            content: `IMPORTANT: You have successfully gathered information using search tools. Now you MUST use that information to answer the user's original question. 
+            content: `CRITICAL INSTRUCTION: You have successfully gathered the information. Now provide the final answer.
 
-Look back at the tool results in this conversation and:
-1. Extract any IDs, names, or data from successful tool calls
-2. Use those values to call the action tools (like mattermost_summarize_channel, mattermost_post_message, etc.)
-3. DO NOT call any more search tools - you already have the information you need
+Requirements for your response:
+1. Present ONLY the information the user asked for
+2. Use clean Markdown formatting (## headings, **bold**, bullet points)
+3. DO NOT mention any tool names or technical processes
+4. DO NOT say "I already provided this" - just provide it again in a clean format
+5. If listing many items, organize them into logical groups with subheadings
 
-If the search results show a channel/user/post exists, use its ID to complete the action.`
+Provide your final answer now.`,
           });
+          searchLoopCount = 0;
         }
-      } else {
-        // No tool calls and no text content - prompt LLM to respond
-        console.warn("[Agent] LLM provided neither tool calls nor text response");
-        messages.push({
-          role: "user",
-          content: `Please provide a response based on the information available or explain what additional information you need.
-
-CRITICAL: Format your response properly with:
-- ## Headings for main sections
-- ### Subheadings for subsections  
-- **Bold** for important names and terms
-- * Bullet points for lists
-- Blank lines between sections
-
-DO NOT provide a wall of text. Structure your response clearly.`,
-        });
       }
     }
 
@@ -713,7 +817,16 @@ DO NOT provide a wall of text. Structure your response clearly.`,
       console.warn(`[Agent] Reached maximum loop count (${MAX_LOOPS})`);
       messages.push({
         role: "user",
-        content: "Please provide a final summary based on all the information gathered so far.",
+        content: `You must now provide a final response to the user.
+
+Requirements:
+1. Use only the information you've gathered from successful tool calls
+2. Format cleanly with Markdown (## headings, **bold**, bullet points)
+3. Organize information logically (group related items, use subheadings)
+4. DO NOT mention tools, functions, or technical processes
+5. DO NOT apologize excessively - just provide the best answer you can
+
+Provide your final formatted response now.`,
       });
 
       // One final attempt to get a response
@@ -728,7 +841,7 @@ DO NOT provide a wall of text. Structure your response clearly.`,
           messages: messages,
           tools: [],
           tool_choice: "none",
-          max_tokens: 800,
+          max_tokens: 1000,
         },
       });
 
