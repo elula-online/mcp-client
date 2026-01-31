@@ -513,17 +513,20 @@ DO NOT search again. USE THE ID ABOVE.`;
           if (
             errorAnalysis.suggestedRecovery === "mattermost_search_channels"
           ) {
-            return `The channel "${originalArgs.channel}" was not found. 
-
-NEXT STEP: Call mattermost_search_channels ONCE with search_term: "${originalArgs.channel}"
-
-After you get the result, extract the channel ID and call ${toolName} again with that ID.`;
+            return `CRITICAL: The channel "${originalArgs.channel}" was not found.
+    
+You must resolve the channel name to an ID.
+STEP 1: Call 'mattermost_search_channels' with search_term: "${originalArgs.channel}".
+STEP 2: Use the 'id' from the results to retry your request.`;
           }
 
           if (errorAnalysis.suggestedRecovery === "mattermost_get_users") {
-            return `The user was not found.
-
-NEXT STEP: Call mattermost_get_users to get all users, find the matching user, extract the user_id, and retry ${toolName} with the correct user_id.`;
+            return `CRITICAL: The user "${originalArgs.username || 'target'}" was not found. 
+    
+You cannot proceed without a valid username. 
+STEP 1: Call 'mattermost_get_users' immediately to see the full list of members.
+STEP 2: Find the correct username that looks like "${originalArgs.username}".
+STEP 3: Retry your original request with the correct username found in the list.`;
           }
 
           if (
@@ -540,15 +543,13 @@ NEXT STEP: Call mattermost_search_messages or mattermost_search_threads to find 
         // main agent loop
         let consecutiveFailedAttempts = 0;
         let lastFailedToolName = "";
-        let searchLoopCount = 0;
 
         while (isRunning && loopCount < MAX_LOOPS) {
           loopCount++;
           console.log(`[Agent] Loop ${loopCount}/${MAX_LOOPS}`);
 
-          // Force final answer if we've done too many search loops
-          const shouldForceAnswer =
-            searchLoopCount >= 2 || loopCount >= MAX_LOOPS - 1;
+          // FIX: Removed searchLoopCount logic. Only force answer if we hit max safety loops.
+          const shouldForceAnswer = loopCount >= MAX_LOOPS - 1;
 
           const response = await gateway.run({
             provider: "workers-ai",
@@ -575,6 +576,30 @@ NEXT STEP: Call mattermost_search_messages or mattermost_search_threads to find 
 
           const toolCalls = result.result.tool_calls || [];
           const assistantContent = result.result.response || "";
+
+          // FIX: Detect "Leaky JSON". If LLM outputs raw JSON in text instead of tool_call, reject it.
+          // This keeps the LLM in control but enforces protocol.
+          if (toolCalls.length === 0 && assistantContent.trim().startsWith('{')) {
+             if (assistantContent.includes('"name":') || assistantContent.includes('"parameters":')) {
+                console.warn("[Agent] Detected leaked JSON. Rejecting and prompting for retry.");
+                
+                messages.push({
+                   role: "assistant",
+                   content: assistantContent // Log the mistake
+                });
+
+                messages.push({
+                   role: "user",
+                   content: `SYSTEM ERROR: You outputted the tool call as raw text JSON. 
+                   
+STOP. Do not write JSON in the response text. 
+You must use the 'tool_calls' field protocol to execute tools.
+Retry the tool call now correctly.`
+                });
+                
+                continue; // Skip rest of loop, force LLM to try again
+             }
+          }
 
           // if LLM provides a text response with no tool calls, check for technical jargon
           if (
@@ -646,20 +671,7 @@ Rewrite your response now.`,
             assistantMessage.tool_calls = toolCalls;
             messages.push(assistantMessage);
 
-            // Track if only search/discovery tools are being called
-            let onlySearchToolsCalled = toolCalls.every(
-              (tc: ToolCall) =>
-                tc.name.includes("search") ||
-                tc.name.includes("list") ||
-                tc.name.includes("get_users") ||
-                tc.name.includes("get_channels"),
-            );
-
-            if (onlySearchToolsCalled) {
-              searchLoopCount++;
-            } else {
-              searchLoopCount = 0;
-            }
+            // FIX: Removed "onlySearchToolsCalled" and "searchLoopCount" logic here to allow natural chaining.
 
             // Process each tool call
             for (const toolCall of toolCalls) {
@@ -700,8 +712,6 @@ Requirements:
 - Confirm what was done
 - no technical terms
 - Be brief and friendly
-
-Example: "✓ Message sent to **#town-square** successfully!"
 
 Respond to the user immediately.`,
                 });
@@ -780,39 +790,14 @@ Respond to the user immediately.`,
 
                   console.log(`[Agent] ✓ Tool ${name} succeeded`);
 
+                  // FIX: Removed the "isActionTool" logic here. 
+                  // We now let the loop continue so the LLM receives the tool output 
+                  // and decides whether to chain another tool or answer the user.
+                  
                   // Reset failure tracking on success
                   consecutiveFailedAttempts = 0;
                   lastFailedToolName = "";
 
-                  // ADD THIS NEW CODE HERE:
-                  // ========================
-                  // If this was an action tool (not search/list), prompt for immediate response
-                  const isActionTool =
-                    !name.includes("search") &&
-                    !name.includes("list") &&
-                    !name.includes("get_users") &&
-                    !name.includes("get_channels") &&
-                    !name.includes("get_stats");
-
-                  if (isActionTool) {
-                    // This was an action (post, reply, add, etc.) - force immediate user response
-                    console.log(
-                      `[Agent] Action tool succeeded, prompting for user response`,
-                    );
-                    messages.push({
-                      role: "user",
-                      content: `Perfect! The action completed successfully. Now provide a brief, friendly confirmation to the user.
-
-your response should sound like this:
-✓ Done! [Brief description of what was accomplished]
-
-DO NOT call any more tools. Just confirm the action was completed.`,
-                    });
-
-                    // Force next iteration to not allow tools
-                    searchLoopCount = 999;
-                  }
-                  // ========================
                 } else {
                   // CONSTRAINT 2: Tool failed - analyze error and provide recovery guidance
                   const errorAnalysis = analyzeToolError(
@@ -850,7 +835,7 @@ DO NOT call any more tools. Just confirm the action was completed.`,
                     );
                     messages.push({
                       role: "user",
-                      content: `You have attempted to use ${name} multiple times without success. Based on all the information you've gathered so far, please provide a helpful response to the user explaining what you found (if anything) or what the issue might be. Do not attempt to use ${name} again.`,
+                      content: `You have attempted to use ${name} multiple times without success. Based on all the information you've gathered so far, please provide a helpful response to the user explaining what you found (if anything) or what the issue might be. Do not attempt to use ${name} again. Do not just read out the results from the tool but you need to use the data from the tool result to give an informative response and if they are juust tool call args do not read them out you need to call the tool`,
                     });
                     consecutiveFailedAttempts = 0;
                   } else {
@@ -900,25 +885,8 @@ DO NOT call any more tools. Just confirm the action was completed.`,
               }
             }
 
-            // If we've done 2+ consecutive search loops with successful results, force action
-            if (searchLoopCount >= 2 && successfulToolCalls.size > 0) {
-              console.warn(
-                `[Agent] ${searchLoopCount} consecutive search loops detected. Forcing action or final answer.`,
-              );
-              messages.push({
-                role: "user",
-                content: `CRITICAL INSTRUCTION: You have successfully gathered the information. Now provide the final answer.
-
-Requirements for your response:
-1. Present ONLY the information the user asked for
-3. DO NOT mention any tool names or technical processes
-4. DO NOT say "I already provided this" - just provide it again
-5. If listing many items, organize them into logical groups with subheadings
-
-Provide your final answer now.`,
-              });
-              searchLoopCount = 0;
-            }
+            // FIX: Removed the "searchLoopCount >= 2" forced exit block here.
+            // We trust the loop limits and the LLM to finish naturally.
           }
         }
 
@@ -932,7 +900,8 @@ Requirements:
 1. Use only the information you've gathered from successful tool calls
 3. Organize information logically
 4. DO NOT mention tools, functions, or technical processes
-5. DO NOT apologize excessively - just provide the best answer you can
+5. DO NOT apologize excessively
+6. Do not just read out the results from the tool but you need to use the data from the tool result to give an informative response and if they are juust tool call args do not read them out you need to call the tool
 
 Provide your final formatted response now.`,
           });
