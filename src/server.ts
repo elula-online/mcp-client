@@ -478,7 +478,26 @@ export class MyAgent extends Agent<Env, never> {
             return null;
           }
 
-          // Check if we already have the ID from previous searches
+          // 1. CRITICAL FIX: Check if we already used a valid ID (26 chars) and it still failed
+          // This usually means the channel exists, but the bot isn't a member (Permission Denied/404)
+          const isMattermostId = /^[a-z0-9]{26}$/i.test(
+            originalArgs.channel || "",
+          );
+
+          if (
+            toolName.includes("summarize_channel") &&
+            isMattermostId &&
+            errorAnalysis.errorType === "not_found"
+          ) {
+            return `CRITICAL FAILURE: You attempted to use a specific Channel ID ("${originalArgs.channel}"), but it returned 404/Not Found.
+
+Since this is a valid ID pattern, this error means **THE BOT IS NOT A MEMBER OF THE CHANNEL**.
+
+STOP SEARCHING. STOP RETRYING.
+Immediate Action: Inform the user that you found the channel but need to be added to it to read messages.`;
+          }
+
+          // 2. Standard Recovery: Check if we already have the ID mapped from previous searches
           const channelName = originalArgs.channel
             ?.toLowerCase()
             .replace(/\s+/g, "-");
@@ -509,7 +528,7 @@ You MUST now call ${toolName} again with these EXACT parameters:
 DO NOT search again. USE THE ID ABOVE.`;
           }
 
-          // If ID not discovered yet, provide ONE-TIME search instruction
+          // 3. If ID not discovered yet, provide ONE-TIME search instruction
           if (
             errorAnalysis.suggestedRecovery === "mattermost_search_channels"
           ) {
@@ -521,7 +540,7 @@ STEP 2: Use the 'id' from the results to retry your request.`;
           }
 
           if (errorAnalysis.suggestedRecovery === "mattermost_get_users") {
-            return `CRITICAL: The user "${originalArgs.username || 'target'}" was not found. 
+            return `CRITICAL: The user "${originalArgs.username || "target"}" was not found. 
     
 You cannot proceed without a valid username. 
 STEP 1: Call 'mattermost_get_users' immediately to see the full list of members.
@@ -579,26 +598,34 @@ NEXT STEP: Call mattermost_search_messages or mattermost_search_threads to find 
 
           // FIX: Detect "Leaky JSON". If LLM outputs raw JSON in text instead of tool_call, reject it.
           // This keeps the LLM in control but enforces protocol.
-          if (toolCalls.length === 0 && assistantContent.trim().startsWith('{')) {
-             if (assistantContent.includes('"name":') || assistantContent.includes('"parameters":')) {
-                console.warn("[Agent] Detected leaked JSON. Rejecting and prompting for retry.");
-                
-                messages.push({
-                   role: "assistant",
-                   content: assistantContent // Log the mistake
-                });
+          if (
+            toolCalls.length === 0 &&
+            assistantContent.trim().startsWith("{")
+          ) {
+            if (
+              assistantContent.includes('"name":') ||
+              assistantContent.includes('"parameters":')
+            ) {
+              console.warn(
+                "[Agent] Detected leaked JSON. Rejecting and prompting for retry.",
+              );
 
-                messages.push({
-                   role: "user",
-                   content: `SYSTEM ERROR: You outputted the tool call as raw text JSON. 
+              messages.push({
+                role: "assistant",
+                content: assistantContent, // Log the mistake
+              });
+
+              messages.push({
+                role: "user",
+                content: `SYSTEM ERROR: You outputted the tool call as raw text JSON. 
                    
 STOP. Do not write JSON in the response text. 
 You must use the 'tool_calls' field protocol to execute tools.
-Retry the tool call now correctly.`
-                });
-                
-                continue; // Skip rest of loop, force LLM to try again
-             }
+Retry the tool call now correctly.`,
+              });
+
+              continue; // Skip rest of loop, force LLM to try again
+            }
           }
 
           // if LLM provides a text response with no tool calls, check for technical jargon
@@ -790,14 +817,13 @@ Respond to the user immediately.`,
 
                   console.log(`[Agent] ✓ Tool ${name} succeeded`);
 
-                  // FIX: Removed the "isActionTool" logic here. 
-                  // We now let the loop continue so the LLM receives the tool output 
+                  // FIX: Removed the "isActionTool" logic here.
+                  // We now let the loop continue so the LLM receives the tool output
                   // and decides whether to chain another tool or answer the user.
-                  
+
                   // Reset failure tracking on success
                   consecutiveFailedAttempts = 0;
                   lastFailedToolName = "";
-
                 } else {
                   // CONSTRAINT 2: Tool failed - analyze error and provide recovery guidance
                   const errorAnalysis = analyzeToolError(
