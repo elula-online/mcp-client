@@ -53,7 +53,12 @@ interface ToolExecution {
   signature: string;
   result: any;
   success: boolean;
-  errorType?: "not_found" | "invalid_params" | "missing_id" | "other" | "user_auth_error";
+  errorType?:
+    | "not_found"
+    | "invalid_params"
+    | "missing_id"
+    | "other"
+    | "user_auth_error";
 }
 
 export class MyAgent extends Agent<Env, never> {
@@ -227,10 +232,13 @@ export class MyAgent extends Agent<Env, never> {
       }
     }
 
-// mattermost Chat endpoint
+    // mattermost Chat endpoint
     if (request.method === "POST" && url.pathname.endsWith("/chat")) {
       try {
-        const { prompt, email } = (await request.json()) as { prompt: string , email: string};
+        const { prompt, email } = (await request.json()) as {
+          prompt: string;
+          email: string;
+        };
 
         // check connection state before attempting to use tools
         const servers = await this.mcp.listServers();
@@ -318,7 +326,11 @@ export class MyAgent extends Agent<Env, never> {
         const discoveredIds = new Map<string, string>();
 
         // Validate and sanitize tool arguments before execution
-        function sanitizeToolArgs(toolName: string, args: any,  manualEmail?: string): any {
+        function sanitizeToolArgs(
+          toolName: string,
+          args: any,
+          manualEmail?: string,
+        ): any {
           // Safety check: ensure toolName is defined
           if (!toolName) {
             console.error("[sanitizeToolArgs] toolName is undefined!");
@@ -327,7 +339,7 @@ export class MyAgent extends Agent<Env, never> {
 
           const sanitized = { ...args };
 
-         if (manualEmail) {
+          if (manualEmail) {
             sanitized.userEmail = manualEmail;
           }
 
@@ -431,7 +443,12 @@ export class MyAgent extends Agent<Env, never> {
           errorContent: string,
           toolArgs: any,
         ): {
-          errorType: "not_found" | "invalid_params" | "missing_id" | "user_auth_error" | "other";
+          errorType:
+            | "not_found"
+            | "invalid_params"
+            | "missing_id"
+            | "user_auth_error"
+            | "other";
           suggestedRecovery?: string;
           missingParam?: string;
           isRecoverable: boolean;
@@ -439,7 +456,7 @@ export class MyAgent extends Agent<Env, never> {
           // Safety check
           if (!toolName) toolName = "unknown_tool";
           if (!errorContent) errorContent = "";
-          
+
           const errorLower = errorContent.toLowerCase();
 
           // Check for user authentication/access errors - CRITICAL: These are NOT recoverable
@@ -451,9 +468,9 @@ export class MyAgent extends Agent<Env, never> {
             errorLower.includes("access denied") ||
             errorLower.includes("not authorized")
           ) {
-            return { 
-              errorType: "user_auth_error", 
-              isRecoverable: false 
+            return {
+              errorType: "user_auth_error",
+              isRecoverable: false,
             };
           }
 
@@ -520,7 +537,7 @@ export class MyAgent extends Agent<Env, never> {
             if (errorAnalysis.errorType === "user_auth_error") {
               return `CRITICAL ERROR: User authentication failed.
 
-The email "${originalArgs.userEmail || 'provided'}" is not found in the Mattermost system.
+The email "${originalArgs.userEmail || "provided"}" is not found in the Mattermost system.
 
 You MUST STOP attempting to call tools and inform the user:
 "It appears your email address is not registered in the Mattermost system. Please contact your administrator to:
@@ -656,7 +673,7 @@ Call tools NOW when needed, don't describe your plan.`,
           });
 
           const result = await response.json();
-          
+
           // OpenAI response format
           if (!result.choices || !result.choices[0]) {
             return Response.json(
@@ -709,9 +726,13 @@ Retry the tool call now correctly.`,
           ) {
             // Detect if LLM is describing what it WOULD do instead of doing it
             const isDescribingToolCall =
-              /the request (should|would|will) include/i.test(assistantContent) ||
+              /the request (should|would|will) include/i.test(
+                assistantContent,
+              ) ||
               /request details are/i.test(assistantContent) ||
-              /to (get|fetch|retrieve).*(the request|I need|should include)/i.test(assistantContent) ||
+              /to (get|fetch|retrieve).*(the request|I need|should include)/i.test(
+                assistantContent,
+              ) ||
               /(channel|user|message):\s*[a-z]/i.test(assistantContent);
 
             if (isDescribingToolCall && loopCount < MAX_LOOPS - 3) {
@@ -740,7 +761,9 @@ Call the tool NOW.`,
               /\bfunction\s+(call|name)/i.test(assistantContent) ||
               /\bparameter(s)?\s+(is|are|was|were)/i.test(assistantContent) ||
               /channel_id.*[a-z0-9]{26}/i.test(assistantContent) ||
-              /I was unable to.*using the.*(function|tool)/i.test(assistantContent) ||
+              /I was unable to.*using the.*(function|tool)/i.test(
+                assistantContent,
+              ) ||
               /I have already provided.*in my previous response/i.test(
                 assistantContent,
               );
@@ -957,7 +980,7 @@ Respond to the user immediately.`,
                     console.warn(
                       `[Agent] User authentication error detected. Forcing immediate user response.`,
                     );
-                    
+
                     const recoveryPrompt = createErrorRecoveryPrompt(
                       name,
                       errorAnalysis,
@@ -967,7 +990,9 @@ Respond to the user immediately.`,
 
                     messages.push({
                       role: "user",
-                      content: recoveryPrompt || `CRITICAL: Authentication failed. Inform the user they need to contact their administrator to be added to Mattermost.`,
+                      content:
+                        recoveryPrompt ||
+                        `CRITICAL: Authentication failed. Inform the user they need to contact their administrator to be added to Mattermost.`,
                     });
 
                     // Force exit from tool processing loop
@@ -1021,13 +1046,37 @@ Respond to the user immediately.`,
                     }
                   }
                 }
-              } catch (e: any) {
-                console.error(`[Agent] Tool execution error:`, e);
-                
-                // Check if the exception message contains user authentication errors
-                const errorMessage = e.message || String(e);
-                const errorAnalysis = analyzeToolError(name, errorMessage, parsedArgs);
-                
+              } catch (error: any) {
+                console.error(`[Agent] Tool execution error:`, error);
+
+                // 1. EXTRACT THE REAL ERROR (Unwrap the nested JSON)
+                let errorMessage = error.message || "Unknown error";
+                try {
+                  // The error is often double-encoded like: {"... message": "{\"error\":\"Access Denied...\"}"}
+                  // We try to find the inner JSON structure
+                  if (
+                    errorMessage.includes("Access Denied") ||
+                    errorMessage.includes("permission")
+                  ) {
+                    // Regex to grab the clean message if parsing fails
+                    const cleanMatch =
+                      errorMessage.match(/Access Denied:[^"]+/);
+                    if (cleanMatch) errorMessage = cleanMatch[0];
+                  } else if (errorMessage.includes("{")) {
+                    // Try parsing purely to clean it up
+                    const parsed = JSON.parse(
+                      errorMessage.substring(errorMessage.indexOf("{")),
+                    );
+                    if (parsed.error?.message) {
+                      const inner = JSON.parse(parsed.error.message);
+                      errorMessage = inner.error || parsed.error.message;
+                    }
+                  }
+                } catch (e) {
+                  /* If parsing fails, use original errorMessage */
+                }
+
+                // SEND EXACT ERROR TO LLM 
                 messages.push({
                   role: "tool",
                   tool_call_id: callId,
@@ -1038,36 +1087,28 @@ Respond to the user immediately.`,
                   }),
                 });
 
-                if (errorAnalysis.errorType === "user_auth_error") {
-                  console.warn(
-                    `[Agent] User authentication error in exception. Forcing immediate user response.`,
-                  );
-                  
-                  const recoveryPrompt = createErrorRecoveryPrompt(
-                    name,
-                    errorAnalysis,
-                    parsedArgs,
-                    discoveredIds,
-                  );
-
+                // HANDLE SPECIFIC PERMISSION ERRORS
+                if (
+                  errorMessage.toLowerCase().includes("access denied") ||
+                  errorMessage.toLowerCase().includes("permission")
+                ) {
                   messages.push({
                     role: "user",
-                    content: recoveryPrompt || `CRITICAL: Authentication failed. Inform the user they need to contact their administrator to be added to Mattermost.`,
-                  });
+                    content: `SYSTEM ALERT: The tool execution failed due to an authorization restriction on the user's account (${parsedArgs.userEmail}).
 
-                  consecutiveFailedAttempts = 999;
-                  break;
-                } else {
-                  messages.push({
-                    role: "user",
-                    content: `The tool ${name} threw an exception: ${errorMessage}. Please analyze if you need different parameters or a different tool to accomplish the task.`,
+          ERROR DETAILS: "${errorMessage}"
+          
+          CRITICAL INSTRUCTION FOR YOUR RESPONSE:
+          1. Speak directly to the user about THEIR account status.
+          2. STOP saying "I don't have permission". instead say "You do not have permission".
+          3. Explicitly state: "Your account (${parsedArgs.userEmail}) lacks the necessary permissions to read content in this channel."
+          4. Do not retry. Advise them to contact an administrator.`,
                   });
+                  break; 
                 }
               }
             }
 
-            // FIX: Removed the "searchLoopCount >= 2" forced exit block here.
-            // We trust the loop limits and the LLM to finish naturally.
           }
         }
 
@@ -1149,7 +1190,6 @@ Provide your final formatted response now.`,
         );
       }
     }
-
 
     return new Response(`Agent "${this.name}" active.`, { status: 200 });
   }
