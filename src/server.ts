@@ -18,6 +18,7 @@ type Env = {
   CFAccessClientId: string;
   CFAccessClientSecret: string;
   PARAAT_AUTH_SECRET: string;
+  OPENAI_API_KEY: string;
 };
 
 // type Message =
@@ -52,7 +53,7 @@ interface ToolExecution {
   signature: string;
   result: any;
   success: boolean;
-  errorType?: "not_found" | "invalid_params" | "missing_id" | "other";
+  errorType?: "not_found" | "invalid_params" | "missing_id" | "other" | "user_auth_error";
 }
 
 export class MyAgent extends Agent<Env, never> {
@@ -226,10 +227,10 @@ export class MyAgent extends Agent<Env, never> {
       }
     }
 
-    // Chat endpoint
+// mattermost Chat endpoint
     if (request.method === "POST" && url.pathname.endsWith("/chat")) {
       try {
-        const { prompt } = (await request.json()) as { prompt: string };
+        const { prompt, email } = (await request.json()) as { prompt: string , email: string};
 
         // check connection state before attempting to use tools
         const servers = await this.mcp.listServers();
@@ -317,8 +318,29 @@ export class MyAgent extends Agent<Env, never> {
         const discoveredIds = new Map<string, string>();
 
         // Validate and sanitize tool arguments before execution
-        function sanitizeToolArgs(toolName: string, args: any): any {
+        function sanitizeToolArgs(toolName: string, args: any,  manualEmail?: string): any {
+          // Safety check: ensure toolName is defined
+          if (!toolName) {
+            console.error("[sanitizeToolArgs] toolName is undefined!");
+            toolName = "unknown_tool";
+          }
+
           const sanitized = { ...args };
+
+         if (manualEmail) {
+            sanitized.userEmail = manualEmail;
+          }
+
+          for (const key in sanitized) {
+            if (typeof sanitized[key] === "string") {
+              const lowerValue = sanitized[key].toLowerCase().trim();
+              if (lowerValue === "true") {
+                sanitized[key] = true;
+              } else if (lowerValue === "false") {
+                sanitized[key] = false;
+              }
+            }
+          }
 
           // Convert string numbers to actual numbers for numeric parameters
           const numericParams = [
@@ -409,12 +431,31 @@ export class MyAgent extends Agent<Env, never> {
           errorContent: string,
           toolArgs: any,
         ): {
-          errorType: "not_found" | "invalid_params" | "missing_id" | "other";
+          errorType: "not_found" | "invalid_params" | "missing_id" | "user_auth_error" | "other";
           suggestedRecovery?: string;
           missingParam?: string;
           isRecoverable: boolean;
         } {
+          // Safety check
+          if (!toolName) toolName = "unknown_tool";
+          if (!errorContent) errorContent = "";
+          
           const errorLower = errorContent.toLowerCase();
+
+          // Check for user authentication/access errors - CRITICAL: These are NOT recoverable
+          if (
+            errorLower.includes("user not found") ||
+            errorLower.includes("user not found for email") ||
+            errorLower.includes("unauthorized") ||
+            errorLower.includes("permission denied") ||
+            errorLower.includes("access denied") ||
+            errorLower.includes("not authorized")
+          ) {
+            return { 
+              errorType: "user_auth_error", 
+              isRecoverable: false 
+            };
+          }
 
           // Check for 404 / not found errors
           if (
@@ -475,6 +516,21 @@ export class MyAgent extends Agent<Env, never> {
           discoveredIdsContext: Map<string, string>,
         ): string | null {
           if (!errorAnalysis.isRecoverable) {
+            // Special handling for user authentication errors
+            if (errorAnalysis.errorType === "user_auth_error") {
+              return `CRITICAL ERROR: User authentication failed.
+
+The email "${originalArgs.userEmail || 'provided'}" is not found in the Mattermost system.
+
+You MUST STOP attempting to call tools and inform the user:
+"It appears your email address is not registered in the Mattermost system. Please contact your administrator to:
+1. Be added to Mattermost
+2. Be added to the necessary channels
+
+Once your account is set up, you'll be able to access channel information."
+
+DO NOT retry this operation. Respond to the user immediately with this message.`;
+            }
             return null;
           }
 
@@ -570,14 +626,28 @@ NEXT STEP: Call mattermost_search_messages or mattermost_search_threads to find 
           // FIX: Removed searchLoopCount logic. Only force answer if we hit max safety loops.
           const shouldForceAnswer = loopCount >= MAX_LOOPS - 1;
 
+          // Add guidance on first loop to prevent LLM from describing what it will do
+          if (loopCount === 1) {
+            messages.push({
+              role: "system",
+              content: `CRITICAL INSTRUCTION: When you need information, you must IMMEDIATELY call the appropriate tool. DO NOT describe what you plan to do, what parameters you need, or what the request should include. Just call the tool directly.
+
+Example - WRONG: "To get channel statistics, the request should include channel: paraat ai and message_limit: 100"
+Example - CORRECT: [Immediately calls the tool with those parameters]
+
+Call tools NOW when needed, don't describe your plan.`,
+            });
+          }
+
           const response = await gateway.run({
-            provider: "workers-ai",
-            endpoint: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            provider: "openai",
+            endpoint: "chat/completions",
             headers: {
               "Content-Type": "application/json",
-              authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN || "LOCAL_AUTH_FALLBACK"}`,
+              authorization: `Bearer ${this.env.OPENAI_API_KEY}`,
             },
             query: {
+              model: "gpt-4o", // or "gpt-4o-mini" for faster/cheaper, "gpt-4-turbo" for most capable
               messages: messages,
               tools: shouldForceAnswer ? [] : tools,
               tool_choice: shouldForceAnswer ? "none" : "auto",
@@ -586,15 +656,18 @@ NEXT STEP: Call mattermost_search_messages or mattermost_search_threads to find 
           });
 
           const result = await response.json();
-          if (!result.success) {
+          
+          // OpenAI response format
+          if (!result.choices || !result.choices[0]) {
             return Response.json(
               { error: "Gateway Error", details: result },
               { status: 500 },
             );
           }
 
-          const toolCalls = result.result.tool_calls || [];
-          const assistantContent = result.result.response || "";
+          const choice = result.choices[0];
+          const toolCalls = choice.message?.tool_calls || [];
+          const assistantContent = choice.message?.content || "";
 
           // FIX: Detect "Leaky JSON". If LLM outputs raw JSON in text instead of tool_call, reject it.
           // This keeps the LLM in control but enforces protocol.
@@ -634,13 +707,40 @@ Retry the tool call now correctly.`,
             assistantContent &&
             assistantContent.trim().length > 0
           ) {
+            // Detect if LLM is describing what it WOULD do instead of doing it
+            const isDescribingToolCall =
+              /the request (should|would|will) include/i.test(assistantContent) ||
+              /request details are/i.test(assistantContent) ||
+              /to (get|fetch|retrieve).*(the request|I need|should include)/i.test(assistantContent) ||
+              /(channel|user|message):\s*[a-z]/i.test(assistantContent);
+
+            if (isDescribingToolCall && loopCount < MAX_LOOPS - 3) {
+              console.warn(
+                "[Agent] LLM is describing tool parameters instead of calling the tool. Redirecting.",
+              );
+              messages.push({
+                role: "assistant",
+                content: assistantContent,
+              });
+              messages.push({
+                role: "user",
+                content: `CRITICAL ERROR: You are DESCRIBING what you would do instead of DOING it.
+
+DO NOT explain what parameters you need or what the request should include.
+IMMEDIATELY call the appropriate tool with the parameters you just described.
+
+Call the tool NOW.`,
+              });
+              continue;
+            }
+
             // Detect if response contains technical jargon that should not be shown to users
             const hasTechnicalJargon =
               /tool_[a-zA-Z0-9_]+_mattermost/i.test(assistantContent) ||
-              /\bfunction\b/i.test(assistantContent) ||
-              /\bparameter/i.test(assistantContent) ||
+              /\bfunction\s+(call|name)/i.test(assistantContent) ||
+              /\bparameter(s)?\s+(is|are|was|were)/i.test(assistantContent) ||
               /channel_id.*[a-z0-9]{26}/i.test(assistantContent) ||
-              /I was unable to.*using the.*function/i.test(assistantContent) ||
+              /I was unable to.*using the.*(function|tool)/i.test(assistantContent) ||
               /I have already provided.*in my previous response/i.test(
                 assistantContent,
               );
@@ -702,12 +802,15 @@ Rewrite your response now.`,
 
             // Process each tool call
             for (const toolCall of toolCalls) {
-              const { name, arguments: args, id: callId } = toolCall;
+              // OpenAI format: function name is in toolCall.function.name
+              const name = toolCall.function?.name || toolCall.name;
+              const args = toolCall.function?.arguments || toolCall.arguments;
+              const callId = toolCall.id;
 
               // Parse and sanitize arguments
               let parsedArgs =
                 typeof args === "string" ? JSON.parse(args) : { ...args };
-              parsedArgs = sanitizeToolArgs(name, parsedArgs);
+              parsedArgs = sanitizeToolArgs(name, parsedArgs, email);
 
               // Create unique signature for this tool call
               const argsString = JSON.stringify(parsedArgs);
@@ -785,6 +888,8 @@ Respond to the user immediately.`,
                   if (parsed.content?.[0]?.text) {
                     cleanContent = parsed.content[0].text;
                   }
+
+                  console.log("Tool result: ", cleanContent);
                 } catch {
                   // Not nested JSON, use as-is
                 }
@@ -794,7 +899,8 @@ Respond to the user immediately.`,
                   !cleanContent.toLowerCase().includes('"error"') &&
                   !cleanContent.toLowerCase().includes('"success": false') &&
                   !cleanContent.toLowerCase().includes("404") &&
-                  !cleanContent.toLowerCase().includes("not found");
+                  !cleanContent.toLowerCase().includes("not found") &&
+                  !cleanContent.toLowerCase().includes("user not found");
 
                 if (isSuccess) {
                   // Mark as successful to prevent re-execution
@@ -846,6 +952,29 @@ Respond to the user immediately.`,
                     content: cleanContent,
                   });
 
+                  // CRITICAL: If this is a user authentication error, immediately force response
+                  if (errorAnalysis.errorType === "user_auth_error") {
+                    console.warn(
+                      `[Agent] User authentication error detected. Forcing immediate user response.`,
+                    );
+                    
+                    const recoveryPrompt = createErrorRecoveryPrompt(
+                      name,
+                      errorAnalysis,
+                      parsedArgs,
+                      discoveredIds,
+                    );
+
+                    messages.push({
+                      role: "user",
+                      content: recoveryPrompt || `CRITICAL: Authentication failed. Inform the user they need to contact their administrator to be added to Mattermost.`,
+                    });
+
+                    // Force exit from tool processing loop
+                    consecutiveFailedAttempts = 999; // High number to trigger response
+                    break;
+                  }
+
                   // Track consecutive failures of the same tool
                   if (lastFailedToolName === name) {
                     consecutiveFailedAttempts++;
@@ -894,20 +1023,46 @@ Respond to the user immediately.`,
                 }
               } catch (e: any) {
                 console.error(`[Agent] Tool execution error:`, e);
+                
+                // Check if the exception message contains user authentication errors
+                const errorMessage = e.message || String(e);
+                const errorAnalysis = analyzeToolError(name, errorMessage, parsedArgs);
+                
                 messages.push({
                   role: "tool",
                   tool_call_id: callId,
                   name: name,
                   content: JSON.stringify({
                     error: "Tool execution failed",
-                    details: e.message,
+                    details: errorMessage,
                   }),
                 });
 
-                messages.push({
-                  role: "user",
-                  content: `The tool ${name} threw an exception: ${e.message}. Please analyze if you need different parameters or a different tool to accomplish the task.`,
-                });
+                if (errorAnalysis.errorType === "user_auth_error") {
+                  console.warn(
+                    `[Agent] User authentication error in exception. Forcing immediate user response.`,
+                  );
+                  
+                  const recoveryPrompt = createErrorRecoveryPrompt(
+                    name,
+                    errorAnalysis,
+                    parsedArgs,
+                    discoveredIds,
+                  );
+
+                  messages.push({
+                    role: "user",
+                    content: recoveryPrompt || `CRITICAL: Authentication failed. Inform the user they need to contact their administrator to be added to Mattermost.`,
+                  });
+
+                  consecutiveFailedAttempts = 999;
+                  break;
+                } else {
+                  messages.push({
+                    role: "user",
+                    content: `The tool ${name} threw an exception: ${errorMessage}. Please analyze if you need different parameters or a different tool to accomplish the task.`,
+                  });
+                }
               }
             }
 
@@ -934,13 +1089,14 @@ Provide your final formatted response now.`,
 
           // One final attempt to get a response
           const finalResponse = await gateway.run({
-            provider: "workers-ai",
-            endpoint: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            provider: "openai",
+            endpoint: "chat/completions",
             headers: {
               "Content-Type": "application/json",
-              authorization: `Bearer ${this.env.CLOUDFLARE_API_TOKEN || "LOCAL_AUTH_FALLBACK"}`,
+              authorization: `Bearer ${this.env.OPENAI_API_KEY}`,
             },
             query: {
+              model: "gpt-4o",
               messages: messages,
               tools: [],
               tool_choice: "none",
@@ -949,10 +1105,10 @@ Provide your final formatted response now.`,
           });
 
           const finalResult = await finalResponse.json();
-          if (finalResult.success && finalResult.result.response) {
+          if (finalResult.choices && finalResult.choices[0]?.message?.content) {
             messages.push({
               role: "assistant",
-              content: finalResult.result.response,
+              content: finalResult.choices[0].message.content,
             });
           }
         }
@@ -993,6 +1149,7 @@ Provide your final formatted response now.`,
         );
       }
     }
+
 
     return new Response(`Agent "${this.name}" active.`, { status: 200 });
   }
