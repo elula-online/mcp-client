@@ -664,11 +664,11 @@ Call tools NOW when needed, don't describe your plan.`,
               authorization: `Bearer ${this.env.OPENAI_API_KEY}`,
             },
             query: {
-              model: "gpt-4o", // or "gpt-4o-mini" for faster/cheaper, "gpt-4-turbo" for most capable
+              model: "gpt-5-nano", 
               messages: messages,
               tools: shouldForceAnswer ? [] : tools,
               tool_choice: shouldForceAnswer ? "none" : "auto",
-              max_tokens: 1000,
+              // max_tokens: 1000,
             },
           });
 
@@ -1137,11 +1137,11 @@ Provide your final formatted response now.`,
               authorization: `Bearer ${this.env.OPENAI_API_KEY}`,
             },
             query: {
-              model: "gpt-4o",
+              model: "gpt-5-nano",
               messages: messages,
               tools: [],
               tool_choice: "none",
-              max_tokens: 1000,
+              // max_tokens: 1000,
             },
           });
 

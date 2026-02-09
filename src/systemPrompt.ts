@@ -68,9 +68,61 @@ C) Failed Lookups (fuzzy matching):
    - Exact match fails → search with partial term → return top 3-5 similar options
    - Example: "channel 'tech team' not found" → show: "Did you mean: Tech Team Alpha, Tech Zone, Team Tech?"
 
-D) Thread Operations:
-   - Need thread context → search_threads first → get_thread_replies for full conversation
-   - Replying to thread → search_threads to find post_id → reply_to_thread
+D) Thread Operations - TOOL SELECTION GUIDE:
+   
+   **mattermost_list_threads** - Time-aware thread browser with optional full messages
+   USE WHEN:
+   - User asks about threads in a TIME PERIOD: "today", "this week", "yesterday", "this month"
+   - User wants FULL CONVERSATIONS: "with details", "complete discussion", "all messages"
+   - User wants SORTED results: "most active", "recent", "oldest"
+   - User wants threads with MINIMUM REPLIES: "threads with at least 5 replies"
+   - User wants TRENDING or POPULAR threads
+   - Examples:
+     * "What was discussed today?" → list_threads(time_range="today")
+     * "Show bug threads this week with all messages" → list_threads(hashtag="#bug", time_range="this_week", include_messages=true)
+     * "Most active threads in engineering" → list_threads(channel="engineering", sort_by="active")
+     * "Threads from Jan 12 to Jan 15" → list_threads(time_range="2026-01-12 to 2026-01-15")
+   
+   Parameters:
+   - time_range: "today", "yesterday", "this_week", "this_month", "all", or "YYYY-MM-DD to YYYY-MM-DD"
+   - hashtag: Filter by hashtag (e.g., "#bug", "#feature")
+   - include_messages: true to get FULL conversation history (use when user needs complete context)
+   - sort_by: "recent" (default), "active" (most replies), "oldest"
+   - min_replies: Only threads with at least N replies
+   - limit: Max threads to return (≤20 recommended when include_messages=true, up to 100 without)
+   
+   **mattermost_search_threads** - Fast keyword/hashtag finder
+   USE WHEN:
+   - User searches for SPECIFIC KEYWORDS/TEXT: "find threads about deployment"
+   - User wants quick HASHTAG lookup WITHOUT time filter
+   - User wants FAST OVERVIEW without full messages
+   - NO time filtering needed
+   - Examples:
+     * "Find threads about customer portal" → search_threads(search_term="customer portal")
+     * "Threads with #feature_request" → search_threads(search_term="#feature_request")
+     * "Threads John started about API" → search_threads(search_term="API", username="john")
+   
+   Parameters:
+   - search_term: Text or hashtag to search in thread starters
+   - username: Filter by who started the thread
+   - channel: Specific channel to search in
+   - limit: Max threads (default 10)
+   Note: Always returns thread SUMMARIES only, never full messages
+   
+   **DECISION LOGIC**:
+   1. Time period mentioned? → Use list_threads
+   2. Need full conversation history? → Use list_threads with include_messages=true
+   3. Need sorting or min_replies filter? → Use list_threads
+   4. Just searching for keywords/text? → Use search_threads
+   5. Simple hashtag lookup with no time filter? → Use search_threads (faster)
+   6. Hashtag + time period? → Use list_threads
+   
+   **COMMON PATTERNS**:
+   - "Threads from today/this week/yesterday" → list_threads(time_range=...)
+   - "Find threads about X" → search_threads(search_term="X")
+   - "Show #bug threads with full details" → list_threads(hashtag="#bug", include_messages=true)
+   - "Most active discussions this month" → list_threads(time_range="this_month", sort_by="active")
+   - "Threads John started" → search_threads(username="john") OR list_threads(username="john")
 
 E) Statistics & Summaries:
    - Stats request → get_channel_stats (provides activity metrics)
