@@ -36,6 +36,7 @@ export interface ToolExecution {
     | "missing_id"
     | "other"
     | "user_auth_error";
+  timestamp?: Date;
 }
 
 export interface ErrorAnalysis {
