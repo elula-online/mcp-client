@@ -177,7 +177,7 @@ This data is cached and updated every 5 minutes. Current cache: ${cacheStats.cha
           messages: state.messages,
           tools: shouldForceAnswer ? [] : tools,
           tool_choice: shouldForceAnswer ? "none" : "auto",
-          max_tokens: 1000,
+          // max_tokens: 1000,
         },
       });
 
@@ -370,7 +370,7 @@ This data is cached and updated every 5 minutes. Current cache: ${cacheStats.cha
           messages: state.messages,
           tools: [],
           tool_choice: "none",
-          max_tokens: 1000,
+          // max_tokens: 1000,
         },
       });
 
