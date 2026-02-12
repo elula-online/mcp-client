@@ -52,7 +52,7 @@ export async function initializeMcpConnection(agent: Agent<Env, never>) {
       console.log(`[Agent] Cleaned up ${cleanedCount} stale connections`);
     }
 
-    console.log(`[Agent] Connecting to MCP portal: ${portalUrl}`);
+     
 
     const result = await agent.addMcpServer(
       "SystemMCPportal",

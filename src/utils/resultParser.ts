@@ -14,18 +14,27 @@ export interface ParsedToolOutput {
  */
 export function parseToolOutput(rawOutput: any): ParsedToolOutput {
   let content = "";
+  let strategyUsed = "";
 
-  // Strategy 1: MCP standard format with nested content
+  // Strategy 1: MCP standard format with nested content (with result wrapper)
   if (rawOutput?.result?.content?.[0]?.text) {
     content = rawOutput.result.content[0].text;
+    strategyUsed = "result.content[0].text";
   }
-  // Strategy 2: Direct string response
+  // Strategy 2: MCP format with direct content array (no result wrapper)
+  else if (rawOutput?.content?.[0]?.text) {
+    content = rawOutput.content[0].text;
+    strategyUsed = "content[0].text";
+  }
+  // Strategy 3: Direct string response
   else if (typeof rawOutput === "string") {
     content = rawOutput;
+    strategyUsed = "direct string";
   }
-  // Strategy 3: Stringify object
+  // Strategy 4: Stringify object
   else {
     content = JSON.stringify(rawOutput);
+    strategyUsed = "stringified object";
   }
 
   // Try to parse nested JSON if present
@@ -33,14 +42,21 @@ export function parseToolOutput(rawOutput: any): ParsedToolOutput {
     const parsed = JSON.parse(content);
     if (parsed.content?.[0]?.text) {
       content = parsed.content[0].text;
+      strategyUsed += " -> nested content[0].text";
     }
   } catch {
     // Not nested JSON, use as-is
   }
 
+  console.log(`[resultParser] Strategy: ${strategyUsed}, Content length: ${content.length}`);
+
   // Detect if this is an error response
   const isError = detectError(content);
   const errorType = isError ? detectErrorType(content) : undefined;
+
+  if (isError) {
+    console.log(`[resultParser] Detected as error (${errorType}), content preview:`, content.substring(0, 200));
+  }
 
   return { content, isError, errorType };
 }
@@ -54,38 +70,51 @@ function detectError(content: string): boolean {
 
   const contentLower = content.toLowerCase();
 
-  // Check for explicit error indicators
+  // First, try to parse as JSON to check structure
+  try {
+    const parsed = JSON.parse(content);
+    
+    // Check for explicit error fields in JSON
+    if (parsed.error !== undefined && parsed.error !== null) {
+      return true;
+    }
+    
+    if (parsed.success === false && parsed.error) {
+      return true;
+    }
+    
+    // If it has data/results/channels/users fields, it's likely valid data
+    if (parsed.channels || parsed.users || parsed.data || parsed.results) {
+      return false;
+    }
+  } catch {
+    // Not valid JSON, continue with string checks
+  }
+
+  // Check for explicit error indicators (must be in a clear error context)
   if (
-    contentLower.includes('"error"') ||
+    contentLower.includes('"error":') ||
     contentLower.includes('"success": false')
   ) {
     return true;
   }
 
-  // Check for HTTP error codes
-  if (
-    contentLower.includes("404") ||
-    contentLower.includes("400") ||
-    contentLower.includes("401") ||
-    contentLower.includes("403") ||
-    contentLower.includes("500")
-  ) {
+  // Check for HTTP error status codes in response
+  if (/\b(404|400|401|403|500|502|503)\b/.test(contentLower) && 
+      (contentLower.includes('status') || contentLower.includes('code'))) {
     return true;
   }
 
-  // Check for common error phrases
+  // Check for common error phrases at the start of content
   const errorPhrases = [
-    "not found",
-    "user not found",
-    "channel not found",
-    "does not exist",
-    "failed to",
-    "unable to",
     "error:",
     "exception:",
+    "failed to ",
+    "unable to ",
   ];
 
-  return errorPhrases.some((phrase) => contentLower.includes(phrase));
+  const contentStart = contentLower.substring(0, 100);
+  return errorPhrases.some((phrase) => contentStart.includes(phrase));
 }
 
 /**
