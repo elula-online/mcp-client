@@ -62,6 +62,7 @@ export function parseToolOutput(rawOutput: any): ParsedToolOutput {
 }
 
 /**
+ * @description Detect if content represents an error
  * Detect if content represents an error
  * More robust than simple string matching
  */
