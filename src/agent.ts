@@ -14,7 +14,8 @@ export class MyAgent extends Agent<Env, never> {
     await initializeMcpConnection(this);
   }
 
-  async onRequest(request: Request): Promise<Response> {
+
+  async onRequest(request: Request, ctx?: any): Promise<Response> {
     const url = new URL(request.url);
 
     // health check endpoint
@@ -37,13 +38,18 @@ export class MyAgent extends Agent<Env, never> {
     }
 
     if (request.method === "POST" && url.pathname.endsWith("/cache/refresh")) {
-      const { email } = (await request.json()) as { email: string };
-      return handleCacheRefresh(this, email);
+      const body = (await request.json()) as { email: string };
+      return handleCacheRefresh(this, body.email);
     }
 
     // Chat endpoint
     if (request.method === "POST" && url.pathname.endsWith("/chat")) {
-      return handleChatRequest(request, this);
+
+      const executionCtx = ctx as ExecutionContext || { 
+        waitUntil: (promise: Promise<any>) => promise 
+      };
+      
+      return handleChatRequest(request, this, executionCtx);
     }
 
     return new Response(`Agent "${this.name}" active.`, { status: 200 });

@@ -14,7 +14,7 @@ export async function streamAndNotifyPusher(
     query: {
       ...params.query,
       stream: true,
-      stream_options: { include_usage: true }, // vital for cost tracking
+      stream_options: { include_usage: true }, 
     },
   };
 
@@ -32,7 +32,7 @@ export async function streamAndNotifyPusher(
   let usage = null;
   let chunkCount = 0;
   let batch: any[] = [];
-  const BATCH_SIZE = 5; // Send every 5 chunks to reduce Pusher overhead
+  const BATCH_SIZE = 5; 
 
   // Send "Start" event
   ctx.waitUntil(sendPusherBatchEvent(env, [{
@@ -49,7 +49,7 @@ export async function streamAndNotifyPusher(
       const chunkText = decoder.decode(value, { stream: true });
       buffer += chunkText;
       const lines = buffer.split("\n");
-      buffer = lines.pop() || ""; // Keep incomplete line
+      buffer = lines.pop() || ""; 
 
       for (const line of lines) {
         if (!line.startsWith("data: ")) continue;
@@ -59,10 +59,8 @@ export async function streamAndNotifyPusher(
         try {
           const json = JSON.parse(dataStr);
 
-          // Extract Content Delta
           const delta = json.choices?.[0]?.delta?.content || "";
           
-          // Extract Usage (usually in the last chunk)
           if (json.usage) {
             usage = json.usage;
           }
@@ -71,7 +69,6 @@ export async function streamAndNotifyPusher(
             fullContent += delta;
             chunkCount++;
 
-            // Add to batch
             batch.push({
               type: 'universal.stream',
               chunk_count: chunkCount,
@@ -82,7 +79,6 @@ export async function streamAndNotifyPusher(
               }
             });
 
-            // Flush batch if full
             if (batch.length >= BATCH_SIZE) {
               const currentBatch = batch.splice(0, BATCH_SIZE);
               ctx.waitUntil(sendPusherBatchEvent(env, currentBatch, channel));
@@ -99,7 +95,6 @@ export async function streamAndNotifyPusher(
       ctx.waitUntil(sendPusherBatchEvent(env, batch, channel));
     }
 
-    // Send "Done" event
     ctx.waitUntil(sendPusherBatchEvent(env, [{
       type: 'universal.done',
       total_chunks: chunkCount,

@@ -1,13 +1,10 @@
 import type { Env } from "../types";
 import type { PusherResponse } from "../types";
 
-
-// Cache these at module level
 let cachedHmacKey: CryptoKey | null = null;
 let cachedSecret: string | null = null;
 const encoder = new TextEncoder();
 
-// Performance monitoring helper
 function createTimer(label: string) {
     const start = performance.now();
     return {
@@ -23,7 +20,7 @@ async function getOrCreateHmacKey(secret: string): Promise<CryptoKey> {
     const timer = createTimer('HMAC Key Import');
     
     if (cachedHmacKey && cachedSecret === secret) {
-        console.log('[PUSHER_PERF] HMAC Key: Using cached key');
+        // console.log('[PUSHER_PERF] HMAC Key: Using cached key');
         timer.end();
         return cachedHmacKey;
     }
@@ -71,7 +68,6 @@ export async function sendPusherEvent(
     const overallTimer = createTimer('Total Pusher Event');
     const { PUSHER_APP_ID: appId, PUSHER_APP_KEY: key, PUSHER_APP_SECRET: secret, PUSHER_APP_CLUSTER: cluster } = env;
     
-    // Step 1: Build body
     const bodyTimer = createTimer('Build Body');
     const urlPath = `/apps/${appId}/events`;
     const timestamp = Math.floor(Date.now() / 1000);
@@ -83,7 +79,6 @@ export async function sendPusherEvent(
     console.log(`[PUSHER_PERF] Body size: ${body.length} bytes`);
     bodyTimer.end();
     
-    // Step 2: Parallel crypto operations
     const cryptoTimer = createTimer('Crypto Operations (Parallel)');
     const [bodyMd5, keyObj] = await Promise.all([
         computeMD5(body),
@@ -91,7 +86,6 @@ export async function sendPusherEvent(
     ]);
     cryptoTimer.end();
     
-    // Step 3: Build signature
     const sigTimer = createTimer('Build Auth Signature');
     const queryParams = new URLSearchParams({
         auth_key: key,
@@ -104,7 +98,6 @@ export async function sendPusherEvent(
     queryParams.append('auth_signature', signature);
     sigTimer.end();
     
-    // Step 4: Network request
     const endpoint = `https://api-${cluster}.pusher.com${urlPath}?${queryParams.toString()}`;
     
     const networkTimer = createTimer('Network Request to Pusher');
@@ -115,7 +108,6 @@ export async function sendPusherEvent(
     });
     const networkTime = networkTimer.end();
     
-    // Step 5: Read response
     const responseTimer = createTimer('Read Response');
     const text = await response.text();
     responseTimer.end();
@@ -141,38 +133,35 @@ export async function sendPusherBatchEvent(
     const overallTimer = createTimer(`Total Batch Event (${events.length} events)`);
     const { PUSHER_APP_ID: appId, PUSHER_APP_KEY: key, PUSHER_APP_SECRET: secret, PUSHER_APP_CLUSTER: cluster } = env;
     
-    const bodyTimer = createTimer('Build Batch Body');
-    const urlPath = `/apps/${appId}/batch_events`;
+    const urlPath = `/apps/${appId}/batch_events`; 
     const timestamp = Math.floor(Date.now() / 1000);
+
     const body = JSON.stringify({
         batch: events.map((event) => ({
             channel: channel,
-            name: 'message.received',
+            name: event.type || 'message.received',
             data: JSON.stringify(event),
         })),
     });
-    bodyTimer.end();
-    
-    const cryptoTimer = createTimer('Crypto Operations (Parallel)');
+
     const [bodyMd5, keyObj] = await Promise.all([
         computeMD5(body),
         getOrCreateHmacKey(secret)
     ]);
-    cryptoTimer.end();
     
-    const sigTimer = createTimer('Build Auth Signature');
     const queryParams = new URLSearchParams({
         auth_key: key,
         auth_timestamp: timestamp.toString(),
         auth_version: '1.0',
         body_md5: bodyMd5,
     });
+
     const stringToSign = `POST\n${urlPath}\n${queryParams.toString()}`;
     const signature = await computeHmacSignature(keyObj, stringToSign);
     queryParams.append('auth_signature', signature);
-    sigTimer.end();
     
     const endpoint = `https://api-${cluster}.pusher.com${urlPath}?${queryParams.toString()}`;
+    
     const networkTimer = createTimer('Network Request to Pusher');
     const response = await fetch(endpoint, {
         method: 'POST',
@@ -182,13 +171,12 @@ export async function sendPusherBatchEvent(
     const networkTime = networkTimer.end();
     
     const text = await response.text();
-    const totalTime = overallTimer.end();
+    const totalTime = overallTimer.end(); 
     
     if (!response.ok) {
-        const error = new Error(`Pusher batch event failed: ${response.status} - ${text}`) as any;
-        error.status = response.status;
-        error.response = text;
-        throw error;
+        console.error(`PUSHER ERROR [${response.status}]:`, text);
+    }else {
+        console.log(`PUSHER SUCCESS: Sent ${events.length} events to ${channel}`);
     }
     
     return { 

@@ -11,38 +11,45 @@ import { getGlobalCache } from "./cacheHandler";
 import type { AgentContext } from "../models/ToolResult";
 import { sendPusherBatchEvent } from "../services/pusherHandler";
 import { streamAndNotifyPusher } from "./streamAndNotifyPusher";
+import type { ExecutionContext } from "@cloudflare/workers-types";
+import { sanitizeForOpenAI } from "../services/sanitizeForOpenAI";
 
-/**
- * Handle chat endpoint - main agent loop with improved architecture
- */
 export async function handleChatRequest(
   request: Request,
   agent: Agent<Env, never>,
   ctx: ExecutionContext
 ): Promise<Response> {
   let accumulated_usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-  let model_used = "gpt-5-nano"; // Defaulting to gpt-4 to match production config
+  let model_used = "gpt-4o"; 
   let channel = "";
   let thread_id = "";
   let webhook_url = "";
 
   try {
     const body = (await request.json()) as any;
+    console.log("received request");
     
     const email = body.email;
-    const thread_id = body.thread_id || "default";
-    const webhook_url = body.webhook_url || "";
-    const messages = body.messages || [];
+    thread_id = body.thread_id || "default";
+    webhook_url = body.webhook_url || "";
     
-    // Get the last user message as the "current prompt" for the validator/state
-    const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
-    const currentPrompt = lastUserMessage?.content || "";
+    let messages = body.messages || [];
+    if (!Array.isArray(messages) || messages.length === 0) {
+        
+        if(body.prompt) {
+            messages = [{ role: "user", content: body.prompt }];
+        } else {
+            return Response.json({ error: "No messages provided" }, { status: 400 });
+        }
+    }
 
     channel = `chat.${thread_id}`;
     if (body.model) model_used = body.model;
+    console.log("model: ", model_used);
 
     // Initialize services
     const toolExecutor = new ToolExecutor();
+    const errorRecovery = new ErrorRecoveryService(); 
     const validator = new ResponseValidator();
     const dataCache = getGlobalCache();
     const dataFetcher = new DataFetcher();
@@ -85,8 +92,7 @@ export async function handleChatRequest(
       ? `${systemPrompt}\n\n## AVAILABLE RESOURCES\n${dataCache.formatCompactChannelsForLLM()}\n${dataCache.formatCompactUsersForLLM()}`
       : systemPrompt;
 
-    // 2. Initialize State with full message history
-    // Assuming AgentState constructor accepts (systemPrompt, initialMessagesArray)
+    // 2. Initialize State
     const state = new AgentState(enhancedSystemPrompt, messages); 
     state.transitionTo(AgentLoopState.AWAITING_LLM_RESPONSE);
 
@@ -102,7 +108,8 @@ export async function handleChatRequest(
     // --- Main Loop ---
     while (state.canContinue()) {
       state.incrementLoop();
-      const shouldForceAnswer = state.loopCount >= 9;
+      // Reduced loop limit to 6 to prevent expensive infinite loops
+      const shouldForceAnswer = state.loopCount >= 6; 
 
       ctx.waitUntil(sendPusherBatchEvent(agent.env, [{
         type: 'universal.status',
@@ -111,7 +118,9 @@ export async function handleChatRequest(
         timestamp: Date.now() / 1000
       }], channel));
 
-      // Standard Non-Streaming Call for Tool Decision
+      // ✅ APPLY FIX: Sanitize messages right before sending
+      const sanitizedMessages = sanitizeForOpenAI(state.messages);
+
       const response = await gateway.run({
         provider: "openai",
         endpoint: "chat/completions",
@@ -121,7 +130,7 @@ export async function handleChatRequest(
         },
         query: {
           model: model_used,
-          messages: state.messages,
+          messages: sanitizedMessages, // Use sanitized version
           tools: shouldForceAnswer ? [] : tools,
           tool_choice: shouldForceAnswer ? "none" : "auto",
         },
@@ -129,6 +138,12 @@ export async function handleChatRequest(
 
       const result = await response.json();
       
+      // Handle Gateway/OpenAI Errors Gracefully
+      if (result.error) {
+          console.error("OpenAI Error:", result.error);
+          throw new Error(`OpenAI Provider Error: ${result.error.message}`);
+      }
+
       if (result.usage) {
         accumulated_usage.prompt_tokens += result.usage.prompt_tokens || 0;
         accumulated_usage.completion_tokens += result.usage.completion_tokens || 0;
@@ -139,12 +154,15 @@ export async function handleChatRequest(
       const toolCalls = choice?.message?.tool_calls || [];
       const assistantContent = choice?.message?.content || "";
 
+      // Case: Text Response (Success)
       if (toolCalls.length === 0 && assistantContent) {
-        state.addMessage({ role: "assistant", content: assistantContent });
-        state.transitionTo(AgentLoopState.COMPLETED);
+        // Optional: Validate response quality here
+        // state.addMessage({ role: "assistant", content: assistantContent });
+        // state.transitionTo(AgentLoopState.COMPLETED);
         break;
       }
       
+      // Case: Tool Execution
       if (toolCalls.length > 0) {
         state.transitionTo(AgentLoopState.EXECUTING_TOOLS);
         state.addMessage({ role: "assistant", content: assistantContent || "", tool_calls: toolCalls });
@@ -166,15 +184,41 @@ export async function handleChatRequest(
                 name: res.toolName,
                 content: res.data || JSON.stringify(res.error)
             });
-            if (res.status === 'success') state.markProgress();
+            
+            if (res.status === 'success') {
+                state.markProgress();
+            } else {
+                // Critical: Use Recovery Service
+                state.recordToolFailure(res.toolName);
+                if (errorRecovery.isCriticalError(res)) {
+                    state.transitionTo(AgentLoopState.FAILED);
+                    break;
+                }
+                const recoveryAction = errorRecovery.getRecoveryAction(res, {
+                    discoveredIds: state.discoveredIds,
+                    consecutiveFailures: state.consecutiveFailures,
+                    userEmail: email,
+                    originalArgs:
+                  toolCalls.find((tc: any) => tc.id === result.toolCallId)
+                    ?.arguments || {},
+                });
+                if(recoveryAction.message) state.addMessage(recoveryAction.message);
+            }
         }
         state.transitionTo(AgentLoopState.AWAITING_LLM_RESPONSE);
+      } 
+      // Case: Empty Response (Stuck)
+      else if (!assistantContent) {
+          state.addMessage({ role: 'user', content: "Please continue and provide an answer." });
       }
     }
 
     // --- STREAMING FINAL RESPONSE ---
     if (state.state !== AgentLoopState.COMPLETED) {
       state.addMessage(validator.createFinalResponsePrompt());
+      
+      // ✅ APPLY FIX: Sanitize messages for the final stream as well
+      const finalSanitizedMessages = sanitizeForOpenAI(state.messages);
 
       const streamResult = await streamAndNotifyPusher(
         gateway,
@@ -187,7 +231,7 @@ export async function handleChatRequest(
           },
           query: {
             model: model_used,
-            messages: state.messages,
+            messages: finalSanitizedMessages, // Use sanitized version
             tools: [],
             tool_choice: "none",
           },
@@ -198,7 +242,8 @@ export async function handleChatRequest(
       );
 
       if (streamResult.content) {
-        state.addMessage({ role: "assistant", content: streamResult.content });
+          state.addMessage({ role: "assistant", content: streamResult.content });
+          state.transitionTo(AgentLoopState.COMPLETED);
       }
 
       if (streamResult.usage) {
