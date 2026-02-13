@@ -10,7 +10,23 @@ export type Env = {
   CFAccessClientSecret: string;
   PARAAT_AUTH_SECRET: string;
   OPENAI_API_KEY: string;
+    PUSHER_APP_ID: string;
+    PUSHER_APP_KEY: string;
+    PUSHER_APP_SECRET: string;
+    PUSHER_APP_CLUSTER: string;
+    [key: string]: any; 
 };
+
+export interface PusherResponse {
+    ok: boolean;
+    status: number;
+    text: string;
+    _perf: {
+        total: number;
+        network: number;
+        perEvent?: number;
+    };
+}
 
 export interface Message {
   role: "system" | "user" | "assistant" | "tool";

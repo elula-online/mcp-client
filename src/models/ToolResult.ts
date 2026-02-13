@@ -32,7 +32,7 @@ export interface ToolCallMetadata {
 /**
  * Execution context for tool calls
  */
-export interface ExecutionContext {
+export interface AgentContext {
   toolExecutorMap: Record<string, any>;
   userEmail: string;
   discoveredIds: Map<string, string>;
