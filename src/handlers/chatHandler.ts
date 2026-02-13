@@ -173,7 +173,7 @@ This data is cached and updated every 5 minutes. Current cache: ${cacheStats.cha
           authorization: `Bearer ${agent.env.OPENAI_API_KEY}`,
         },
         query: {
-          model: "gpt-4o",
+          model: "gpt-5-nano",
           messages: state.messages,
           tools: shouldForceAnswer ? [] : tools,
           tool_choice: shouldForceAnswer ? "none" : "auto",
@@ -366,7 +366,7 @@ This data is cached and updated every 5 minutes. Current cache: ${cacheStats.cha
           authorization: `Bearer ${agent.env.OPENAI_API_KEY}`,
         },
         query: {
-          model: "gpt-4o",
+          model: "gpt-5-nano",
           messages: state.messages,
           tools: [],
           tool_choice: "none",
