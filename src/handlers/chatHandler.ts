@@ -138,23 +138,23 @@ export async function handleChatRequest(
       // Reduced loop limit to 6 to prevent expensive infinite loops
       const shouldForceAnswer = state.loopCount >= 6;
 
-      ctx.waitUntil(
-        sendPusherBatchEvent(
-          agent.env,
-          [
-            {
-              type: "universal.status",
-              status: "thinking",
-              message:
-                state.loopCount > 1
-                  ? `Thinking (Step ${state.loopCount})...`
-                  : "Analyzing request...",
-              timestamp: Date.now() / 1000,
-            },
-          ],
-          channel,
-        ),
-      );
+      // ctx.waitUntil(
+      //   sendPusherBatchEvent(
+      //     agent.env,
+      //     [
+      //       {
+      //         type: "universal.status",
+      //         status: "thinking",
+      //         message:
+      //           state.loopCount > 1
+      //             ? `Thinking (Step ${state.loopCount})...`
+      //             : "Analyzing request...",
+      //         timestamp: Date.now() / 1000,
+      //       },
+      //     ],
+      //     channel,
+      //   ),
+      // );
 
       // Sanitize messages right before sending
       const sanitizedMessages = sanitizeForOpenAI(state.messages);
@@ -212,20 +212,20 @@ export async function handleChatRequest(
         });
 
         const toolNames = toolCalls.map((t: any) => t.function.name).join(", ");
-        ctx.waitUntil(
-          sendPusherBatchEvent(
-            agent.env,
-            [
-              {
-                type: "universal.status",
-                status: "tool_use",
-                message: `Using tools: ${toolNames}`,
-                timestamp: Date.now() / 1000,
-              },
-            ],
-            channel,
-          ),
-        );
+        // ctx.waitUntil(
+        //   sendPusherBatchEvent(
+        //     agent.env,
+        //     [
+        //       {
+        //         type: "universal.status",
+        //         status: "tool_use",
+        //         message: `Using tools: ${toolNames}`,
+        //         timestamp: Date.now() / 1000,
+        //       },
+        //     ],
+        //     channel,
+        //   ),
+        // );
 
         const toolResults = await toolExecutor.executeToolCalls(
           toolCalls,
@@ -332,9 +332,9 @@ export async function handleChatRequest(
             completion_tokens: accumulated_usage.completion_tokens,
             total_tokens: accumulated_usage.total_tokens,
             model_used: model_used,
-            uuid: thread_id,
+            uuid: prompt_id,
             response: state.getFinalAnswer(),
-            type: "agent.response",
+            type: "streaming.response",
             debug: state.getMetrics(),
           }),
         }).catch((e) => console.error("Webhook fail", e)),
