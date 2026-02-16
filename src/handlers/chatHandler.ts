@@ -20,7 +20,7 @@ export async function handleChatRequest(
   ctx: ExecutionContext
 ): Promise<Response> {
   let accumulated_usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-  let model_used = "gpt-4o"; 
+  let model_used; 
   let channel = "";
   let thread_id = "";
   let webhook_url = "";
@@ -130,7 +130,7 @@ export async function handleChatRequest(
           authorization: `Bearer ${agent.env.OPENAI_API_KEY}`,
         },
         query: {
-          model: model_used,
+          model: "gpt-5-nano",
           messages: sanitizedMessages, // Use sanitized version
           tools: shouldForceAnswer ? [] : tools,
           tool_choice: shouldForceAnswer ? "none" : "auto",
@@ -231,7 +231,7 @@ export async function handleChatRequest(
             authorization: `Bearer ${agent.env.OPENAI_API_KEY}`,
           },
           query: {
-            model: model_used,
+            model: "gpt-5-nano",
             messages: finalSanitizedMessages, // Use sanitized version
             tools: [],
             tool_choice: "none",
