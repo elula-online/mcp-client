@@ -7,7 +7,7 @@ export async function streamAndNotifyPusher(
   env: Env,
   channel: string,
   ctx: ExecutionContext
-): Promise<{ content: string; usage: any }> {
+): Promise<{ content: string; usage: any, logId: string }> {
 
   const streamParams = {
     ...params,
@@ -23,6 +23,9 @@ export async function streamAndNotifyPusher(
   if (!response.body) {
     throw new Error("No response body for stream");
   }
+
+  
+	const logId = response.headers.get('cf-aig-log-id');
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -105,5 +108,5 @@ export async function streamAndNotifyPusher(
     console.error("Streaming error:", err);
   }
 
-  return { content: fullContent, usage };
+  return { content: fullContent, usage,logId };
 }

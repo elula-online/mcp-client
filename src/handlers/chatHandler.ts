@@ -24,6 +24,7 @@ export async function handleChatRequest(
   let channel = "";
   let thread_id = "";
   let webhook_url = "";
+  let logId = ""
 
   try {
     const body = (await request.json()) as any;
@@ -241,6 +242,8 @@ export async function handleChatRequest(
         ctx
       );
 
+      logId = streamResult.logId
+
       if (streamResult.content) {
           state.addMessage({ role: "assistant", content: streamResult.content });
           state.transitionTo(AgentLoopState.COMPLETED);
@@ -261,7 +264,7 @@ export async function handleChatRequest(
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                logid: `mm-${Date.now()}`,
+                logid: logId || '',
                 prompt_tokens: accumulated_usage.prompt_tokens,
                 completion_tokens: accumulated_usage.completion_tokens,
                 total_tokens: accumulated_usage.total_tokens,
