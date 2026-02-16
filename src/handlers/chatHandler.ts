@@ -25,6 +25,7 @@ export async function handleChatRequest(
   let thread_id = "";
   let webhook_url = "";
   let logId = ""
+  let prompt_id = ""
 
   try {
     const body = (await request.json()) as any;
@@ -33,6 +34,7 @@ export async function handleChatRequest(
     const email = body.email;
     thread_id = body.thread_id || "default";
     webhook_url = body.webhook_url || "";
+    prompt_id =  body.prompt_id || '';
     
     let messages = body.messages || [];
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -56,10 +58,17 @@ export async function handleChatRequest(
     const dataFetcher = new DataFetcher();
 
     // 1. Pusher: Initializing
+    // ctx.waitUntil(sendPusherBatchEvent(agent.env, [{
+    //     type: 'universal.status',
+    //     status: 'initializing',
+    //     message: 'Connecting to Mattermost tools...',
+    //     timestamp: Date.now() / 1000
+    // }], channel));
+
+    
     ctx.waitUntil(sendPusherBatchEvent(agent.env, [{
-        type: 'universal.status',
-        status: 'initializing',
-        message: 'Connecting to Mattermost tools...',
+        type: 'universal.start',
+        model: model_used,
         timestamp: Date.now() / 1000
     }], channel));
 
@@ -128,6 +137,7 @@ export async function handleChatRequest(
         headers: {
           "Content-Type": "application/json",
           authorization: `Bearer ${agent.env.OPENAI_API_KEY}`,
+            'cf-aig-event-id': prompt_id || '',
         },
         query: {
           model: "gpt-5-nano",
@@ -229,6 +239,7 @@ export async function handleChatRequest(
           headers: {
             "Content-Type": "application/json",
             authorization: `Bearer ${agent.env.OPENAI_API_KEY}`,
+            'cf-aig-event-id': prompt_id || '',
           },
           query: {
             model: "gpt-5-nano",
