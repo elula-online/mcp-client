@@ -1,4 +1,4 @@
-import type { ToolResult, ToolCallMetadata, ExecutionContext } from "../models/ToolResult";
+import type { ToolResult, ToolCallMetadata, AgentContext } from "../models/ToolResult";
 import { parseToolOutput, extractErrorMessage } from "../utils/resultParser";
 import { sanitizeToolArgs, extractDiscoveredIds } from "../utils/toolUtils";
 
@@ -19,7 +19,7 @@ export class ToolExecutor {
    */
   async executeToolCalls(
     toolCalls: any[],
-    context: ExecutionContext,
+    context: AgentContext,
   ): Promise<ToolResult[]> {
     if (toolCalls.length === 0) return [];
 
@@ -60,7 +60,7 @@ export class ToolExecutor {
    */
   private prepareToolCallMetadata(
     toolCalls: any[],
-    context: ExecutionContext,
+    context: AgentContext,
   ): ToolCallMetadata[] {
     return toolCalls.map((toolCall) => {
       const name = toolCall.function?.name || toolCall.name;
@@ -158,7 +158,7 @@ export class ToolExecutor {
    */
   private async executeParallel(
     toolCalls: ToolCallMetadata[],
-    context: ExecutionContext,
+    context: AgentContext,
   ): Promise<ToolResult[]> {
     console.log(`[ToolExecutor] Executing ${toolCalls.length} calls in parallel`);
 
@@ -187,7 +187,7 @@ export class ToolExecutor {
    */
   private async executeSequential(
     toolCalls: ToolCallMetadata[],
-    context: ExecutionContext,
+    context: AgentContext,
   ): Promise<ToolResult[]> {
     console.log(`[ToolExecutor] Executing ${toolCalls.length} calls sequentially`);
 
@@ -210,7 +210,7 @@ export class ToolExecutor {
    */
   private async executeSingleTool(
     call: ToolCallMetadata,
-    context: ExecutionContext,
+    context: AgentContext,
   ): Promise<ToolResult> {
     const startTime = Date.now();
 
@@ -345,7 +345,7 @@ export class ToolExecutor {
   private createErrorResult(
     call: ToolCallMetadata,
     error: any,
-    context: ExecutionContext,
+    context: AgentContext,
   ): ToolResult {
     const errorMessage = extractErrorMessage(error);
     const errorType = this.classifyError(errorMessage);
@@ -409,7 +409,7 @@ export class ToolExecutor {
    */
   private tryResolveFromCache(
     call: ToolCallMetadata,
-    context: ExecutionContext,
+    context: AgentContext,
   ): ToolResult | null {
     const cache = context.cache;
     if (!cache) return null;
