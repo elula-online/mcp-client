@@ -139,7 +139,7 @@ export async function sendPusherBatchEvent(
     const body = JSON.stringify({
         batch: events.map((event) => ({
             channel: channel,
-            name: event.type || 'message.received',
+            name: 'message.received',
             data: JSON.stringify(event),
         })),
     });

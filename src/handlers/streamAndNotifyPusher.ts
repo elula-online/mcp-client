@@ -5,7 +5,7 @@ export async function streamAndNotifyPusher(
   gateway: any,
   params: any,
   env: Env,
-  channel: string,
+  channel: string,model_used: string,
   ctx: ExecutionContext
 ): Promise<{ content: string; usage: any, logId: string }> {
 
@@ -38,11 +38,11 @@ export async function streamAndNotifyPusher(
   const BATCH_SIZE = 5; 
 
   // Send "Start" event
-  ctx.waitUntil(sendPusherBatchEvent(env, [{
-    type: 'universal.start',
-    model: params.query.model,
-    timestamp: Date.now() / 1000
-  }], channel));
+  // ctx.waitUntil(sendPusherBatchEvent(env, [{
+  //   type: 'universal.start',
+  //   model: model_used,
+  //   timestamp: Date.now() / 1000
+  // }], channel));
 
   try {
     while (true) {
