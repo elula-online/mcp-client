@@ -105,7 +105,7 @@ export async function handleChatRequest(
       cache: dataCache,
     };
 
-    // --- Main Loop ---
+    // -- Main Loop --
     while (state.canContinue()) {
       state.incrementLoop();
       // Reduced loop limit to 6 to prevent expensive infinite loops
@@ -118,7 +118,7 @@ export async function handleChatRequest(
         timestamp: Date.now() / 1000
       }], channel));
 
-      // ✅ APPLY FIX: Sanitize messages right before sending
+      // Sanitize messages right before sending
       const sanitizedMessages = sanitizeForOpenAI(state.messages);
 
       const response = await gateway.run({
@@ -217,7 +217,7 @@ export async function handleChatRequest(
     if (state.state !== AgentLoopState.COMPLETED) {
       state.addMessage(validator.createFinalResponsePrompt());
       
-      // ✅ APPLY FIX: Sanitize messages for the final stream as well
+      // Sanitize messages for the final stream as well
       const finalSanitizedMessages = sanitizeForOpenAI(state.messages);
 
       const streamResult = await streamAndNotifyPusher(
