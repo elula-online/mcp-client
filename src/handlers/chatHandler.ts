@@ -166,6 +166,7 @@ export async function handleChatRequest(
           "Content-Type": "application/json",
           authorization: `Bearer ${agent.env.OPENAI_API_KEY}`,
           "cf-aig-event-id": prompt_id || "",
+          "cf-aig-metadata": JSON.stringify({ backend_uuid: prompt_id }),
         },
         query: {
           model: "gpt-5-nano",
@@ -288,6 +289,7 @@ export async function handleChatRequest(
             "Content-Type": "application/json",
             authorization: `Bearer ${agent.env.OPENAI_API_KEY}`,
             "cf-aig-event-id": prompt_id || "",
+            "cf-aig-metadata": JSON.stringify({ backend_uuid: prompt_id }),
           },
           query: {
             model: "gpt-5-nano",
