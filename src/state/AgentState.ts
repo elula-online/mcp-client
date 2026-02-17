@@ -42,9 +42,11 @@ export class AgentState {
   lastFailedToolName: string = "";
   totalErrors: number = 0;
 
-  constructor(systemPrompt: string, userPrompt: string) {
+  constructor(systemPrompt: string, history: Message[]) {
     this.messages.push({ role: "system", content: systemPrompt });
-    this.messages.push({ role: "user", content: userPrompt });
+
+    const historyWithoutSystem = history.filter(m => m.role !== 'system');
+    this.messages.push(...historyWithoutSystem);
   }
 
   /**
