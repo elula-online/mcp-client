@@ -333,7 +333,7 @@ export async function handleChatRequest(
             prompt_tokens: accumulated_usage.prompt_tokens,
             completion_tokens: accumulated_usage.completion_tokens,
             total_tokens: accumulated_usage.total_tokens,
-            model_used: model_used,
+            model_used: 'gpt-5-nano',
             uuid: prompt_id,
             response: state.getFinalAnswer(),
             type: "streaming.response",
