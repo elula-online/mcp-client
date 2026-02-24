@@ -202,17 +202,7 @@ Call tools NOW when needed, don't describe your plan.`,
   createFinalResponsePrompt(): Message {
     return {
       role: "user",
-      content: `You must now provide a final response to the user.
-
-Requirements:
-1. Use only the information you've gathered from successful tool calls
-2. Organize information logically with proper formatting
-3. DO NOT mention tools, functions, or technical processes
-4. DO NOT apologize excessively
-5. Use the data from tool results to give an informative response
-6. Do not just read out raw tool arguments
-
-Provide your final formatted response now.`,
+      content: `You must now provide a final response to the user.`,
     };
   }
 }
