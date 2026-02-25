@@ -24,6 +24,8 @@ export async function handleChatRequest(
     completion_tokens: 0,
     total_tokens: 0,
   };
+  let total_streamed_chunks = 0;
+
   let model_used;
   let channel = "";
   let thread_id = "";
@@ -33,7 +35,6 @@ export async function handleChatRequest(
 
   try {
     const body = (await request.json()) as any;
-    console.log("received request");
 
     const email = body.email;
     thread_id = body.thread_id || "default";
@@ -45,31 +46,12 @@ export async function handleChatRequest(
       if (body.prompt) {
         messages = [{ role: "user", content: body.prompt }];
       } else {
-        return Response.json(
-          { error: "No messages provided" },
-          { status: 400 },
-        );
+        return Response.json({ error: "No messages provided" }, { status: 400 });
       }
     }
 
     channel = `chat.${thread_id}`;
     if (body.model) model_used = body.model;
-    console.log("model: ", model_used);
-
-    // Initialize services
-    const toolExecutor = new ToolExecutor();
-    const errorRecovery = new ErrorRecoveryService();
-    const validator = new ResponseValidator();
-    const dataCache = getGlobalCache();
-    const dataFetcher = new DataFetcher();
-
-    // 1. Pusher: Initializing
-    // ctx.waitUntil(sendPusherBatchEvent(agent.env, [{
-    //     type: 'universal.status',
-    //     status: 'initializing',
-    //     message: 'Connecting to Mattermost tools...',
-    //     timestamp: Date.now() / 1000
-    // }], channel));
 
     ctx.waitUntil(
       sendPusherBatchEvent(
@@ -85,33 +67,37 @@ export async function handleChatRequest(
       ),
     );
 
+    // Initialize services
+    const toolExecutor = new ToolExecutor();
+    const errorRecovery = new ErrorRecoveryService();
+    const validator = new ResponseValidator(); // Keeping if needed for future utilities
+    const dataCache = getGlobalCache();
+    const dataFetcher = new DataFetcher();
+
     // MCP Connection Check
     const servers = await agent.mcp.listServers();
-    const connected = servers.some(
-      (s: any) => s.name === "SystemMCPportal" && s.id,
-    );
-    if (!connected) await initializeMcpConnection(agent);
+    if (!servers.some((s: any) => s.name === "SystemMCPportal" && s.id)) {
+      await initializeMcpConnection(agent);
+    }
 
     // Fetch tools
-    let mcpToolsResult = await agent.mcp.getAITools();
+    const mcpToolsResult = await agent.mcp.getAITools();
     const gateway = agent.env.AI.gateway(agent.env.GATEWAY_ID);
     const toolExecutorMap: Record<string, any> = {};
 
-    const tools = Object.entries(mcpToolsResult).map(
-      ([toolKey, tool]: [string, any]) => {
-        toolExecutorMap[toolKey] = tool;
-        return {
-          type: "function",
-          function: {
-            name: toolKey,
-            description: tool.description,
-            parameters: tool.inputSchema.jsonSchema,
-          },
-        };
-      },
-    );
+    const tools = Object.entries(mcpToolsResult).map(([toolKey, tool]: any) => {
+      toolExecutorMap[toolKey] = tool;
+      return {
+        type: "function",
+        function: {
+          name: toolKey,
+          description: tool.description,
+          parameters: tool.inputSchema.jsonSchema,
+        },
+      };
+    });
 
-    // Populate cache for RAG
+    // Populate cache for RAG (Mattermost-specific)
     await dataFetcher.refreshIfNeeded(toolExecutorMap, email, dataCache);
     const cachePopulated = !dataCache.isEmpty();
 
@@ -119,7 +105,7 @@ export async function handleChatRequest(
       ? `${systemPrompt}\n\n## AVAILABLE RESOURCES\n${dataCache.formatCompactChannelsForLLM()}\n${dataCache.formatCompactUsersForLLM()}`
       : systemPrompt;
 
-    // 2. Initialize State
+    // Initialize State
     const state = new AgentState(enhancedSystemPrompt, messages);
     state.transitionTo(AgentLoopState.AWAITING_LLM_RESPONSE);
 
@@ -132,104 +118,56 @@ export async function handleChatRequest(
       cache: dataCache,
     };
 
-    // -- Main Loop --
+    // -- Main Agent Loop (single streaming call per iteration, mirrors GitLab pattern) --
     while (state.canContinue()) {
       state.incrementLoop();
-      // Reduced loop limit to 6 to prevent expensive infinite loops
       const shouldForceAnswer = state.loopCount >= 6;
-
-      // ctx.waitUntil(
-      //   sendPusherBatchEvent(
-      //     agent.env,
-      //     [
-      //       {
-      //         type: "universal.status",
-      //         status: "thinking",
-      //         message:
-      //           state.loopCount > 1
-      //             ? `Thinking (Step ${state.loopCount})...`
-      //             : "Analyzing request...",
-      //         timestamp: Date.now() / 1000,
-      //       },
-      //     ],
-      //     channel,
-      //   ),
-      // );
-
-      // Sanitize messages right before sending
       const sanitizedMessages = sanitizeForOpenAI(state.messages);
 
-      const response = await gateway.run({
-        provider: "openai",
-        endpoint: "chat/completions",
-        headers: {
-          "Content-Type": "application/json",
-          authorization: `Bearer ${agent.env.OPENAI_API_KEY}`,
-          "cf-aig-event-id": prompt_id || "",
-          "cf-aig-metadata": JSON.stringify({ backend_uuid: prompt_id }),
+      // SINGLE NATIVE STREAMING CALL PER LOOP
+      const streamResult = await streamAndNotifyPusher(
+        gateway,
+        {
+          provider: "openai",
+          endpoint: "chat/completions",
+          headers: {
+            "Content-Type": "application/json",
+            authorization: `Bearer ${agent.env.OPENAI_API_KEY}`,
+            "cf-aig-event-id": prompt_id || "",
+            "cf-aig-metadata": JSON.stringify({ backend_uuid: prompt_id }),
+          },
+          query: {
+            model: "gpt-5-nano",
+            messages: sanitizedMessages,
+            tools: shouldForceAnswer ? [] : tools,
+            tool_choice: shouldForceAnswer ? "none" : "auto",
+          },
         },
-        query: {
-          model: "gpt-5-nano",
-          messages: sanitizedMessages, // Use sanitized version
-          tools: shouldForceAnswer ? [] : tools,
-          tool_choice: shouldForceAnswer ? "none" : "auto",
-        },
-      });
+        agent.env,
+        channel,
+        model_used,
+        ctx,
+      );
 
-      const result = await response.json();
+      logId = streamResult.logId;
+      total_streamed_chunks += streamResult.chunkCount;
 
-      // Handle Gateway/OpenAI Errors Gracefully
-      if (result.error) {
-        console.error("OpenAI Error:", result.error);
-        throw new Error(`OpenAI Provider Error: ${result.error.message}`);
-      }
+      accumulated_usage.prompt_tokens += streamResult.usage?.prompt_tokens || 0;
+      accumulated_usage.completion_tokens += streamResult.usage?.completion_tokens || 0;
+      accumulated_usage.total_tokens += streamResult.usage?.total_tokens || 0;
 
-      if (result.usage) {
-        accumulated_usage.prompt_tokens += result.usage.prompt_tokens || 0;
-        accumulated_usage.completion_tokens +=
-          result.usage.completion_tokens || 0;
-        accumulated_usage.total_tokens += result.usage.total_tokens || 0;
-      }
-
-      const choice = result.choices?.[0];
-      const toolCalls = choice?.message?.tool_calls || [];
-      const assistantContent = choice?.message?.content || "";
-
-      // Case: Text Response (Success)
-      if (toolCalls.length === 0 && assistantContent) {
-        // Optional: Validate response quality here
-        // state.addMessage({ role: "assistant", content: assistantContent });
-        // state.transitionTo(AgentLoopState.COMPLETED);
-        break;
-      }
-
-      // Case: Tool Execution
-      if (toolCalls.length > 0) {
-        state.transitionTo(AgentLoopState.EXECUTING_TOOLS);
+      // Case: Tool Calls
+      if (streamResult.toolCalls?.length > 0) {
         state.addMessage({
           role: "assistant",
-          content: assistantContent || "",
-          tool_calls: toolCalls,
+          content: streamResult.content || "", // Include any text streamed before tool calls
+          tool_calls: streamResult.toolCalls,
         });
 
-        const toolNames = toolCalls.map((t: any) => t.function.name).join(", ");
-        // ctx.waitUntil(
-        //   sendPusherBatchEvent(
-        //     agent.env,
-        //     [
-        //       {
-        //         type: "universal.status",
-        //         status: "tool_use",
-        //         message: `Using tools: ${toolNames}`,
-        //         timestamp: Date.now() / 1000,
-        //       },
-        //     ],
-        //     channel,
-        //   ),
-        // );
+        state.transitionTo(AgentLoopState.EXECUTING_TOOLS);
 
         const toolResults = await toolExecutor.executeToolCalls(
-          toolCalls,
+          streamResult.toolCalls,
           executionContext,
         );
 
@@ -244,7 +182,6 @@ export async function handleChatRequest(
           if (res.status === "success") {
             state.markProgress();
           } else {
-            // Critical: Use Recovery Service
             state.recordToolFailure(res.toolName);
             if (errorRecovery.isCriticalError(res)) {
               state.transitionTo(AgentLoopState.FAILED);
@@ -255,91 +192,62 @@ export async function handleChatRequest(
               consecutiveFailures: state.consecutiveFailures,
               userEmail: email,
               originalArgs:
-                toolCalls.find((tc: any) => tc.id === result.toolCallId)
-                  ?.arguments || {},
+                streamResult.toolCalls.find(
+                  (tc: any) => tc.id === res.toolCallId,
+                )?.function?.arguments || {},
             });
-            if (recoveryAction.message)
-              state.addMessage(recoveryAction.message);
+            if (recoveryAction.message) state.addMessage(recoveryAction.message);
           }
         }
-        state.transitionTo(AgentLoopState.AWAITING_LLM_RESPONSE);
+
+        if (state.state !== AgentLoopState.FAILED) {
+          state.transitionTo(AgentLoopState.AWAITING_LLM_RESPONSE);
+        }
       }
-      // Case: Empty Response (Stuck)
-      else if (!assistantContent) {
+      // Case: Final Text Response
+      else {
         state.addMessage({
-          role: "user",
-          content: "Please continue and provide an answer.",
+          role: "assistant",
+          content: streamResult.content,
         });
-      }
-    }
-
-    // --- STREAMING FINAL RESPONSE ---
-    if (state.state !== AgentLoopState.COMPLETED) {
-      state.addMessage(validator.createFinalResponsePrompt());
-
-      // Sanitize messages for the final stream as well
-      const finalSanitizedMessages = sanitizeForOpenAI(state.messages);
-
-      const streamResult = await streamAndNotifyPusher(
-        gateway,
-        {
-          provider: "openai",
-          endpoint: "chat/completions",
-          headers: {
-            "Content-Type": "application/json",
-            authorization: `Bearer ${agent.env.OPENAI_API_KEY}`,
-            "cf-aig-event-id": prompt_id || "",
-            "cf-aig-metadata": JSON.stringify({ backend_uuid: prompt_id }),
-          },
-          query: {
-            model: "gpt-5-nano",
-            messages: finalSanitizedMessages, // Use sanitized version
-            tools: [],
-            tool_choice: "none",
-          },
-        },
-        agent.env,
-        channel,
-        model_used,
-        ctx,
-      );
-
-      logId = streamResult.logId;
-
-      if (streamResult.content) {
-        state.addMessage({ role: "assistant", content: streamResult.content });
         state.transitionTo(AgentLoopState.COMPLETED);
+        break; // Exit the loop entirely
       }
-
-      if (streamResult.usage) {
-        accumulated_usage.prompt_tokens +=
-          streamResult.usage.prompt_tokens || 0;
-        accumulated_usage.completion_tokens +=
-          streamResult.usage.completion_tokens || 0;
-        accumulated_usage.total_tokens += streamResult.usage.total_tokens || 0;
-      }
-
-      state.transitionTo(AgentLoopState.COMPLETED);
     }
 
-    // 4. Webhook Logging
+    ctx.waitUntil(
+      sendPusherBatchEvent(agent.env, [
+        {
+          type: "universal.done",
+          total_chunks: total_streamed_chunks,
+          timestamp: Date.now() / 1000,
+        },
+      ], channel)
+    );
+
+    // Webhook logging
     if (webhook_url) {
       ctx.waitUntil(
         fetch(webhook_url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            logid: logId || "",
+            logid: logId,
+            response: state.getFinalAnswer(),
             prompt_tokens: accumulated_usage.prompt_tokens,
             completion_tokens: accumulated_usage.completion_tokens,
             total_tokens: accumulated_usage.total_tokens,
-            model_used: 'gpt-5-nano',
+            model_used: "gpt-5-nano",
             uuid: prompt_id,
-            response: state.getFinalAnswer(),
             type: "streaming.response",
             debug: state.getMetrics(),
           }),
-        }).catch((e) => console.error("Webhook fail", e)),
+        })
+          .then(async (res) => {
+            if (!res.ok)
+              console.error("[Webhook] Failed:", res.status, await res.text());
+          })
+          .catch((e) => console.error("Webhook fail", e)),
       );
     }
 
