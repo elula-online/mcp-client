@@ -10,7 +10,7 @@ function createTimer(label: string) {
     return {
         end: (): number => {
             const duration = performance.now() - start;
-            console.log(`[PUSHER_PERF] ${label}: ${duration.toFixed(2)}ms`);
+            // console.log(`[PUSHER_PERF] ${label}: ${duration.toFixed(2)}ms`);
             return duration;
         }
     };
@@ -76,7 +76,7 @@ export async function sendPusherEvent(
         channel: channel,
         data: JSON.stringify(eventData),
     });
-    console.log(`[PUSHER_PERF] Body size: ${body.length} bytes`);
+    // console.log(`[PUSHER_PERF] Body size: ${body.length} bytes`);
     bodyTimer.end();
     
     const cryptoTimer = createTimer('Crypto Operations (Parallel)');
@@ -176,7 +176,7 @@ export async function sendPusherBatchEvent(
     if (!response.ok) {
         console.error(`PUSHER ERROR [${response.status}]:`, text);
     }else {
-        console.log(`PUSHER SUCCESS: Sent ${events.length} events to ${channel}`);
+        // console.log(`PUSHER SUCCESS: Sent ${events.length} events to ${channel}`);
     }
     
     return { 

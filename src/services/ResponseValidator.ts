@@ -99,7 +99,7 @@ Retry the tool call now correctly.`,
     const isDescribing = patterns.some((pattern) => pattern.test(content));
 
     if (isDescribing) {
-      console.warn("[Validator] LLM is describing instead of acting");
+      // console.warn("[Validator] LLM is describing instead of acting");
 
       return {
         isValid: false,
@@ -148,7 +148,7 @@ Call the tool NOW.`,
     );
 
     if (hasTechnicalJargon) {
-      console.warn("[Validator] Technical jargon detected");
+      // console.warn("[Validator] Technical jargon detected");
 
       return {
         isValid: false,

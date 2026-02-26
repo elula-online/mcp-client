@@ -50,7 +50,7 @@ export class DataCache {
       }
     }
     this.lastUpdated = new Date();
-    console.log(`[DataCache] Cached ${channels.length} channels`);
+    // console.log(`[DataCache] Cached ${channels.length} channels`);
   }
 
   /**
@@ -64,7 +64,7 @@ export class DataCache {
       this.users.set(user.username.toLowerCase(), user);
       this.users.set(user.email.toLowerCase(), user);
     }
-    console.log(`[DataCache] Cached ${users.length} users`);
+    // console.log(`[DataCache] Cached ${users.length} users`);
   }
 
   /**
@@ -217,6 +217,6 @@ export class DataCache {
     this.channels.clear();
     this.users.clear();
     this.lastUpdated = null;
-    console.log("[DataCache] Cache cleared");
+    // console.log("[DataCache] Cache cleared");
   }
 }

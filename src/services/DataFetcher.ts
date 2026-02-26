@@ -49,9 +49,9 @@ export class DataFetcher {
       }
 
       const stats = cache.getStats();
-      console.log(
-        `[DataFetcher] Cache populated: ${stats.channelCount} channels, ${stats.userCount} users`,
-      );
+      // console.log(
+      //   `[DataFetcher] Cache populated: ${stats.channelCount} channels, ${stats.userCount} users`,
+      // );
 
       return success;
     } catch (error) {
@@ -77,12 +77,12 @@ export class DataFetcher {
     ]);
 
     if (!listTool) {
-      console.warn("[DataFetcher] No channel listing tool found");
-      console.log("[DataFetcher] Available tools:", Object.keys(toolExecutorMap));
+      // console.warn("[DataFetcher] No channel listing tool found");
+      // console.log("[DataFetcher] Available tools:", Object.keys(toolExecutorMap));
       return null;
     }
 
-    console.log(`[DataFetcher] Using tool: ${this.getToolName(toolExecutorMap, listTool)}`);
+    // console.log(`[DataFetcher] Using tool: ${this.getToolName(toolExecutorMap, listTool)}`);
 
     try {
       // Call with appropriate parameters
@@ -99,7 +99,7 @@ export class DataFetcher {
 
       // Parse the channels from result
       const channels = this.parseChannels(parsed.content);
-      console.log(`[DataFetcher] Parsed ${channels.length} channels`);
+      // console.log(`[DataFetcher] Parsed ${channels.length} channels`);
       return channels;
     } catch (error) {
       console.error("[DataFetcher] Error fetching channels:", error);
@@ -123,12 +123,12 @@ export class DataFetcher {
     ]);
 
     if (!userTool) {
-      console.warn("[DataFetcher] No user listing tool found");
-      console.log("[DataFetcher] Available tools:", Object.keys(toolExecutorMap));
+      // console.warn("[DataFetcher] No user listing tool found");
+      // console.log("[DataFetcher] Available tools:", Object.keys(toolExecutorMap));
       return null;
     }
 
-    console.log(`[DataFetcher] Using tool: ${this.getToolName(toolExecutorMap, userTool)}`);
+    // console.log(`[DataFetcher] Using tool: ${this.getToolName(toolExecutorMap, userTool)}`);
 
     try {
       // Call with appropriate parameters
@@ -145,7 +145,7 @@ export class DataFetcher {
 
       // Parse the users from result
       const users = this.parseUsers(parsed.content);
-      console.log(`[DataFetcher] Parsed ${users.length} users`);
+      // console.log(`[DataFetcher] Parsed ${users.length} users`);
       return users;
     } catch (error) {
       console.error("[DataFetcher] Error fetching users:", error);
@@ -163,7 +163,7 @@ export class DataFetcher {
     for (const name of possibleNames) {
       // Check exact match
       if (toolExecutorMap[name]) {
-        console.log(`[DataFetcher] Found exact match: ${name}`);
+        // console.log(`[DataFetcher] Found exact match: ${name}`);
         return toolExecutorMap[name];
       }
 
@@ -172,11 +172,11 @@ export class DataFetcher {
         key.toLowerCase().includes(name.toLowerCase()),
       );
       if (found) {
-        console.log(`[DataFetcher] Found partial match: ${found} (looking for ${name})`);
+        // console.log(`[DataFetcher] Found partial match: ${found} (looking for ${name})`);
         return toolExecutorMap[found];
       }
     }
-    console.warn(`[DataFetcher] No tool found matching: ${possibleNames.join(", ")}`);
+    // console.warn(`[DataFetcher] No tool found matching: ${possibleNames.join(", ")}`);
     return null;
   }
 
@@ -198,7 +198,7 @@ export class DataFetcher {
       const data = JSON.parse(content);
 
       // Log the structure for debugging
-      console.log("[DataFetcher] Channel data structure:", Object.keys(data).join(", "));
+      // console.log("[DataFetcher] Channel data structure:", Object.keys(data).join(", "));
 
       // Try different possible structures
       const channelArray =
@@ -209,12 +209,12 @@ export class DataFetcher {
         (Array.isArray(data) ? data : []);
 
       if (!Array.isArray(channelArray)) {
-        console.warn("[DataFetcher] Channel data is not an array:", typeof channelArray);
-        console.warn("[DataFetcher] Data keys:", Object.keys(data));
+        // console.warn("[DataFetcher] Channel data is not an array:", typeof channelArray);
+        // console.warn("[DataFetcher] Data keys:", Object.keys(data));
         return [];
       }
 
-      console.log(`[DataFetcher] Found ${channelArray.length} channels in response`);
+      // console.log(`[DataFetcher] Found ${channelArray.length} channels in response`);
 
       const parsed = channelArray
         .map((ch: any) => ({
@@ -225,7 +225,7 @@ export class DataFetcher {
         }))
         .filter((ch) => ch.id && ch.name); // Only include valid channels
 
-      console.log(`[DataFetcher] Successfully parsed ${parsed.length} valid channels`);
+      // console.log(`[DataFetcher] Successfully parsed ${parsed.length} valid channels`);
       return parsed;
     } catch (error) {
       console.error("[DataFetcher] Error parsing channels:", error);
@@ -242,7 +242,7 @@ export class DataFetcher {
       const data = JSON.parse(content);
 
       // Log the structure for debugging
-      console.log("[DataFetcher] User data structure:", Object.keys(data).join(", "));
+      // console.log("[DataFetcher] User data structure:", Object.keys(data).join(", "));
 
       // Try different possible structures
       const userArray =
@@ -253,12 +253,12 @@ export class DataFetcher {
         (Array.isArray(data) ? data : []);
 
       if (!Array.isArray(userArray)) {
-        console.warn("[DataFetcher] User data is not an array:", typeof userArray);
-        console.warn("[DataFetcher] Data keys:", Object.keys(data));
+        // console.warn("[DataFetcher] User data is not an array:", typeof userArray);
+        // console.warn("[DataFetcher] Data keys:", Object.keys(data));
         return [];
       }
 
-      console.log(`[DataFetcher] Found ${userArray.length} users in response`);
+      // console.log(`[DataFetcher] Found ${userArray.length} users in response`);
 
       const parsed = userArray
         .map((u: any) => ({
@@ -270,7 +270,7 @@ export class DataFetcher {
         }))
         .filter((u) => u.id && u.username); // Only include valid users
 
-      console.log(`[DataFetcher] Successfully parsed ${parsed.length} valid users`);
+      // console.log(`[DataFetcher] Successfully parsed ${parsed.length} valid users`);
       return parsed;
     } catch (error) {
       console.error("[DataFetcher] Error parsing users:", error);
@@ -288,10 +288,10 @@ export class DataFetcher {
     cache: DataCache,
   ): Promise<void> {
     if (!cache.isValid() || cache.isEmpty()) {
-      console.log("[DataFetcher] Cache invalid or empty, refreshing...");
+      // console.log("[DataFetcher] Cache invalid or empty, refreshing...");
       await this.populateCache(toolExecutorMap, userEmail, cache);
     } else {
-      console.log("[DataFetcher] Cache is valid, skipping refresh");
+      // console.log("[DataFetcher] Cache is valid, skipping refresh");
     }
   }
 }
