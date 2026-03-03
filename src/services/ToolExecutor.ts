@@ -172,8 +172,32 @@ export class ToolExecutor {
         setTimeout(() => reject(new Error("Tool execution timeout")), 30000)
       );
 
-      const toolOutput = await Promise.race([tool.execute(call.arguments), timeoutPromise]);
+      const toolOutput: any = await Promise.race([tool.execute(call.arguments), timeoutPromise]);
       const executionTime = Date.now() - startTime;
+
+      // --- BYPASS FALSE POSITIVES FIX ---
+      // If the tool explicitly returns the standard MCP payload { content: [...] } 
+      // and does NOT flag isError: true, it is a guaranteed success. 
+      // We bypass parseToolOutput to prevent it from wrongly triggering on chat message text.
+      if (toolOutput && typeof toolOutput === "object" && toolOutput.content && toolOutput.isError !== true) {
+        const textContent = typeof toolOutput.content[0]?.text === "string" 
+          ? toolOutput.content[0].text 
+          : JSON.stringify(toolOutput.content);
+          
+        extractDiscoveredIds(call.name, textContent, context.discoveredIds);
+
+        return {
+          toolCallId: call.id,
+          toolName: call.name,
+          status: "success",
+          data: textContent,
+          executionTime,
+          timestamp: new Date(),
+        };
+      }
+      // ----------------------------------
+
+      // Fallback: If it's an explicitly flagged error or a non-standard response, parse it normally.
       const parsed = parseToolOutput(toolOutput);
 
       if (parsed.isError) {

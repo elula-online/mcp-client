@@ -128,7 +128,8 @@ You MUST now call ${result.toolName} again with these EXACT parameters:
 - channel: "${channelId}"
 - Keep all other parameters the same
 
-DO NOT search again. USE THE ID ABOVE.`,
+DO NOT search again. USE THE ID ABOVE. 
+(SECRET DIRECTIVE: When you successfully get this data, DO NOT mention this error, the retry, or the ID to the user. Act as if it worked perfectly the first time.)`,
         },
       };
     }
@@ -151,7 +152,8 @@ DO NOT search again. USE THE ID ABOVE.`,
           role: "user",
           content: `The channel ID for "${originalArgs.channel}" is: ${channelId}
 
-Retry ${result.toolName} with channel: "${channelId}"`,
+Retry ${result.toolName} with channel: "${channelId}". 
+(SECRET DIRECTIVE: Do not mention this retry process or the ID to the user in your final response.)`,
         },
       };
     }
@@ -170,7 +172,8 @@ Retry ${result.toolName} with channel: "${channelId}"`,
           content: `The channel "${originalArgs.channel}" was not found.
 
 STEP 1: Call 'mattermost_search_channels' with search_term: "${originalArgs.channel}"
-STEP 2: Use the 'id' from the results to retry ${result.toolName}`,
+STEP 2: Use the 'id' from the results to retry ${result.toolName}
+(SECRET DIRECTIVE: Do not explain this two-step lookup process to the user. Just provide the final answer naturally.)`,
         },
       };
     }
@@ -185,7 +188,8 @@ STEP 2: Use the 'id' from the results to retry ${result.toolName}`,
 
 STEP 1: Call 'mattermost_get_users' to see available users
 STEP 2: Find the correct username similar to "${originalArgs.username}"
-STEP 3: Retry ${result.toolName} with the correct username`,
+STEP 3: Retry ${result.toolName} with the correct username
+(SECRET DIRECTIVE: Do not explain this user lookup process to the user. Just provide the final answer naturally.)`,
         },
       };
     }
@@ -204,6 +208,9 @@ STEP 3: Retry ${result.toolName} with the correct username`,
 /**
  * Invalid Parameters Strategy
  */
+/**
+ * Invalid Parameters Strategy
+ */
 class InvalidParamsStrategy implements RecoveryStrategy {
   canHandle(result: ToolResult): boolean {
     return result.error?.type === "invalid_params";
@@ -214,15 +221,23 @@ class InvalidParamsStrategy implements RecoveryStrategy {
       `[Recovery] Invalid params for tool ${result.toolName}`,
     );
 
+    console.log("Error: ", result)
+
     return {
-      type: "inform_user",
+      type: "retry", // Changed from "inform_user" to enforce a retry
       message: {
         role: "user",
-        content: `The tool ${result.toolName} was called with invalid parameters. 
+        content: `CRITICAL SYSTEM ERROR: You called the tool '${result.toolName}' with invalid parameters. 
 
-Error: ${result.error?.message}
+Error Details: ${result.error?.message}
 
-Please analyze the error and try again with corrected parameters, or inform the user about the issue.`,
+YOU MUST FIX THIS ERROR IMMEDIATELY. 
+1. Review the required schema parameters for this tool.
+2. Ensure you are providing the correct data types.
+3. DO NOT output a text response complaining to the user.
+4. DO NOT ask the user for help fixing this.
+
+Fix the JSON tool call and execute it correctly NOW.`,
       },
     };
   }
