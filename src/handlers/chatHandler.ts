@@ -49,6 +49,12 @@ export async function handleChatRequest(
         return Response.json({ error: "No messages provided" }, { status: 400 });
       }
     }
+    if(!email){
+      console.log("No email")
+    }
+
+    
+      console.log("email", email)
 
     channel = `chat.${thread_id}`;
     if (body.model) model_used = body.model;
@@ -85,14 +91,28 @@ export async function handleChatRequest(
     const gateway = agent.env.AI.gateway(agent.env.GATEWAY_ID);
     const toolExecutorMap: Record<string, any> = {};
 
-    const tools = Object.entries(mcpToolsResult).map(([toolKey, tool]: any) => {
+const tools = Object.entries(mcpToolsResult).map(([toolKey, tool]: any) => {
       toolExecutorMap[toolKey] = tool;
+      
+      // 1. Deep copy the schema so we don't mutate the original in memory
+      const parameters = JSON.parse(JSON.stringify(tool.inputSchema.jsonSchema || {}));
+      
+      // 2. Hide the userEmail property from the LLM
+      if (parameters.properties && parameters.properties.userEmail) {
+        delete parameters.properties.userEmail;
+      }
+      
+      // 3. Remove it from the required array if it exists
+      if (parameters.required && Array.isArray(parameters.required)) {
+        parameters.required = parameters.required.filter((req: string) => req !== "userEmail");
+      }
+
       return {
         type: "function",
         function: {
           name: toolKey,
           description: tool.description,
-          parameters: tool.inputSchema.jsonSchema,
+          parameters: parameters, // The LLM now receives the scrubbed schema
         },
       };
     });
